@@ -1,8 +1,8 @@
 {
   "name": "@jinplu/dsh-plugin-discussion-intent",
-  "version": "1.0.0",
-  "description": "A DSH Discussion Mode that keeps complex AI conversations aligned with your goals and turns them into evidence-based next steps.",
-  "keywords": ["dsh", "dsh-plugin", "deepseek-harness", "discussion", "agent"],
+  "version": "1.1.0",
+  "description": "An intent-calibrated DSH discussion mode that prevents complex conversations from drifting and turns them into evidence-based next steps.",
+  "keywords": ["dsh", "dsh-plugin", "deepseek-harness", "discussion", "intent", "anti-drift", "decision-making", "agent"],
   "license": "MIT",
   "author": "JinPLu",
   "repository": {
@@ -22,6 +22,7 @@
     "lib/invariant.js",
     "lib/client.js",
     "lib/contract.js",
+    "lib/capabilities.js",
     "lib/types/**/*.d.ts",
     "cordis.patch.yml",
     "README.md",
@@ -44,6 +45,10 @@
     "./contract": {
       "types": "./lib/types/contract.d.ts",
       "import": "./lib/contract.js"
+    },
+    "./capabilities": {
+      "types": "./lib/types/capabilities.d.ts",
+      "import": "./lib/capabilities.js"
     },
     "./package.json": "./package.json"
   },

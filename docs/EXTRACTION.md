@@ -1,6 +1,14 @@
 # Runtime integration
 
-本插件对用户表现为 DSH 中多出的一个 Discussion Mode，而不是一套需要理解的 contract 或 capability framework。所有能力都基于已发布的 DSH `0.1.0-rc.6` 公共接口；插件不修改 DSH 主仓，也不向会话日志写入任何自定义事件。
+> **产品定位：单场复杂讨论的意图校准与防漂移控制层，不是通用长期记忆，也不是一次性的需求问答。**
+
+本插件对用户表现为 DSH 中多出的一个 Discussion Mode：它把用户明确的目标、边界与否定项，同模型的暂定理解、方案证据和下一步分开维护，让新信息参与比较而不悄悄改题。所有能力都基于已发布的 DSH `0.1.0-rc.6` 公共接口；插件不修改 DSH 主仓，也不向会话日志写入任何自定义事件。
+
+## v1.1 插件边界
+
+插件对外仍是一个普通 DSH 插件；新增的 `@jinplu/dsh-plugin-discussion-intent/capabilities` 导出只是可验证的能力声明，不宣称当前 DSH 已经在运行时执行 capability policy。所有 DSH Host / Client 调用集中在命名 adapter，领域契约与侧车存储不直接依赖 DSH；测试会阻止该边界被无意绕过。
+
+讨论检查点只有一个落盘路径：`src/sidecar.ts`。配置目录必须相对于 session workspace，绝对路径、父目录越界和非文件名安全的 session id 会在接触文件系统前失败。
 
 ## 最小运行闭环
 
@@ -9,7 +17,7 @@
 | `/discussion` 命令 | 开始、切换强度、退出或恢复讨论 | `/discussion [1=fast | 2=default | 3=deep]` 与 `/discussion off` |
 | Discussion policy | 系统提示策略段，根据档位约束模型的讨论方法 | 模型提炼主题、守住目标，并在合适时收敛 |
 | `discussion_update` | 在实质回复前更新紧凑状态 | 约束、焦点、证据、结论和下一步不会随上下文漂移 |
-| 插件侧车文件 | 权威状态（JSON）与可读检查点（Markdown） | `.dsh/discussions/<session-id>.json` / `.md` |
+| 插件侧车文件 | 让讨论可续、过程可查的权威状态（JSON）与可读检查点（Markdown） | `.dsh/discussions/<session-id>.json` / `.md` |
 | Web Rail 通道 | 插件通过 `webServer` 注册的 HTTP 快照 + SSE 推送 | 四行只读 Rail 实时对应当前会话状态 |
 | 四行 Rail | 只读呈现 Focus / You / Understanding / Next | 用户一眼发现偏题或误解 |
 

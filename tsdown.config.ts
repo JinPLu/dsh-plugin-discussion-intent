@@ -52,5 +52,6 @@ export default defineConfig([
   host('index', 'src/index.ts'),
   host('invariant', 'src/invariant.ts'),
   host('contract', 'src/contract.ts'),
+  host('capabilities', 'src/capabilities.ts'),
   client,
 ])

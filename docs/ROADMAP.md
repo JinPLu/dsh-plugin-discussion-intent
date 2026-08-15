@@ -1,6 +1,6 @@
 # Roadmap
 
-目标是在交互最简单的前提下，交付完整而强力的日常 Discussion Mode，并且只依赖已发布的 DSH `0.1.0-rc.6` 公共接口。当前是 pre-release；npm 发布、Git tag 与 GitHub Release 之前必须先完成发布验收。
+目标是在交互最简单的前提下，交付完整而强力的日常 Discussion Mode：帮助用户在复杂问题尚未完全想清时守住目标、边界与当前焦点，并把探索收敛为有依据的下一步。它不是通用长期记忆；可恢复的讨论检查点是这套意图校准机制的可靠性保障。实现只依赖已发布的 DSH `0.1.0-rc.6` 公共接口。`v1.0.0` 已发布；后续版本在 npm 发布、Git tag 与 GitHub Release 之前必须先完成发布验收。
 
 ## 第一阶段：核心纵向闭环
 
@@ -32,7 +32,8 @@
 - [x] README 安装说明与实际包一致
 - [x] npm tarball 包含预构建 host、invariant、client、contract 和类型声明
 - [x] peer compatibility 范围与消费矩阵一致（当前 `>=0.1.0-rc.6 <0.2.0-0`）
-- [ ] npm provenance、Git tag、GitHub Release 和包版本一致
+- [x] `v1.0.0` 的 npm provenance、Git tag、GitHub Release 和包版本一致
+- [ ] `v1.1.0` 的 npm provenance、Git tag、GitHub Release 和包版本一致
 - [ ] 真实用户 profile 再执行一次安装、启动、开始讨论、切档、落盘和退出验收
 
 ## 后续增强原则
