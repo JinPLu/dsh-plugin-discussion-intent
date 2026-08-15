@@ -1,7 +1,7 @@
 {
   "name": "@jinplu/dsh-plugin-discussion-intent",
   "version": "1.0.0",
-  "description": "A native-feeling Discussion Mode for DeepSeek Harness with anti-drift state, a four-line rail, and automatic Markdown checkpoints.",
+  "description": "A DSH Discussion Mode that keeps complex AI conversations aligned with your goals and turns them into evidence-based next steps.",
   "keywords": ["dsh", "dsh-plugin", "deepseek-harness", "discussion", "agent"],
   "license": "MIT",
   "author": "JinPLu",
