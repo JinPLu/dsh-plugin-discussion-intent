@@ -2,16 +2,22 @@
 
 目标是在交互最简单的前提下，交付完整而强力的日常 Discussion Mode：帮助用户在复杂问题尚未完全想清时守住目标、边界与当前焦点，并把探索收敛为有依据的下一步。它不是通用长期记忆；可恢复的讨论检查点是这套意图校准机制的可靠性保障。实现只依赖已发布的 DSH `0.1.0-rc.6` 公共接口。`v1.0.0` 已发布；后续版本在 npm 发布、Git tag 与 GitHub Release 之前必须先完成发布验收。
 
+官方 rc.6 没有原生 `contributeRun`。插件不能像原生 Discussion Mode 那样冻结一次宿主 Research Run；它只能拒绝让这些结果改写已锁定的问题。
+
 ## 第一阶段：核心纵向闭环
 
-- [x] `/discussion` 无参数开始，模型从上下文提炼暂定主题
-- [x] `/discussion [1=fast | 2=default | 3=deep]` 切换讨论强度
+- [x] `/discussion` 无参数开始，未命名，不推断主题
+- [x] `/discussion [1=fast | 2=default | 3=deep]` 只切换讨论强度
+- [x] `/discussion accept <id>` / `/discussion reject <id>` 处理 Pending Frame Changes
 - [x] `/discussion off` 退出，并保留可恢复状态
 - [x] 三档讨论 policy；深度档落实“第一性原理 + 站在巨人的肩膀往前进”
+- [x] 每轮重注 active Human Frames；新论文和工具结果不能替换它们
 - [x] 原生 `ask_user_question` 仅用于偏好、边界和方向选择
-- [x] 一个模型更新工具维护目标、用户原话、焦点、方案、证据、综合判断和下一步
-- [x] 四行只读 Web Rail（HTTP 快照 + SSE 推送，off 后立即消失）
-- [x] 每次实质更新先写 Markdown 再写 JSON 侧车（`.dsh/discussions/*.md` / `.json`）
+- [x] `discussion_update` 可捕获原话、追加候选证据、修订暂定理解；标题/目标/根焦点改写变成待确认变更
+- [x] 人类 decision/goal 原话在 Focus 仍为空时安装 Focus；goal 原话同时填空 Goal
+- [x] 理解可写；建议、下一步和选项升格不得与 active 否定/非目标矛盾
+- [x] 空闲时四行只读 Web Rail；You 露出全部 active 否定与决定；有 Pending 时单独露出，不显示假主题
+- [x] 每次实质更新先写 Markdown 再写 JSON 侧车（`.dsh/discussions/*.md` / `.json`），`pendingFrameChanges` 落在 version `1`，旧文件缺省为 `[]`
 - [x] 保存失败可见，不静默丢失讨论检查点
 
 ## 第二阶段：对已发布 rc.6 的真实消费验收
@@ -26,6 +32,7 @@
 - [x] 完整停止 → 二次启动 → 恢复同一 session 与档位 → 继续更新并再次落盘
 - [x] 会话日志保持零自定义事件（重启恢复不再依赖任何上游 seam）
 - [x] 在最低支持版、latest 和 canary DSH 上重跑消费矩阵
+- [x] WorldModel / Codex-thread 防漂移契约测试：研究证据不能静默改题；研究型 nextStep/favored 不得覆盖人类否定；Focus 保持 decision/goal 原话直到 `/discussion accept`；`supersedeStatementIds` 必须带新的同会话证明原话
 
 ## 第三阶段：发布准备
 
@@ -33,11 +40,12 @@
 - [x] npm tarball 包含预构建 host、invariant、client、contract 和类型声明
 - [x] peer compatibility 范围与消费矩阵一致（当前 `>=0.1.0-rc.6 <0.2.0-0`）
 - [x] `v1.0.0` 的 npm provenance、Git tag、GitHub Release 和包版本一致
-- [ ] `v1.1.0` 的 npm provenance、Git tag、GitHub Release 和包版本一致
+- [x] `v1.1.0` 的 npm provenance、Git tag、GitHub Release 和包版本一致
+- [ ] `v1.1.1` 的 npm provenance、Git tag、GitHub Release 和包版本一致
 - [ ] 真实用户 profile 再执行一次安装、启动、开始讨论、切档、落盘和退出验收
 
 ## 后续增强原则
 
 发布后的增强必须直接改善讨论质量或日常使用体验，例如更好的断点恢复、Rail 呈现或讨论文件浏览。可选增强要独立探测、独立降级，不能迫使用户配置额外服务，也不能阻断 `/discussion` 核心闭环。
 
-不会预先加入复杂审批、哈希校验或用户不可见的抽象层。只有真实问题和可验证收益出现时，才扩展运行时设计。
+不会预先加入复杂审批、哈希校验或用户不可见的抽象层。只有真实问题和可验证收益出现时，才扩展运行时设计。在官方 rc.6 上，也不会假装已经具备原生 Research Run 冻结。

@@ -19,7 +19,7 @@ import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promis
 import { readFileSync, statSync } from 'node:fs'
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import {
-  assertDiscussionState,
+  decodeDiscussionState,
   renderDiscussionMarkdown,
   withCheckpoint,
   type DiscussionState,
@@ -96,14 +96,13 @@ export async function readDiscussionSidecar(
     throw new Error(`Discussion sidecar ${path} is not valid JSON. Delete the file to reset Discussion Mode.`, { cause })
   }
   try {
-    assertDiscussionState(value)
+    return decodeDiscussionState(value)
   } catch (cause: unknown) {
     throw new Error(
       `Discussion sidecar ${path} is corrupt: ${cause instanceof Error ? cause.message : String(cause)} Delete the file to reset Discussion Mode.`,
       { cause },
     )
   }
-  return value
 }
 
 /** File mtime revision of the sidecar, for freshness checks without parsing. */
@@ -141,14 +140,13 @@ export function readDiscussionSidecarSync(
     throw new Error(`Discussion sidecar ${path} is not valid JSON. Delete the file to reset Discussion Mode.`, { cause })
   }
   try {
-    assertDiscussionState(value)
+    return decodeDiscussionState(value)
   } catch (cause: unknown) {
     throw new Error(
       `Discussion sidecar ${path} is corrupt: ${cause instanceof Error ? cause.message : String(cause)} Delete the file to reset Discussion Mode.`,
       { cause },
     )
   }
-  return value
 }
 
 /** Synchronous sidecar mtime revision for freshness checks. */

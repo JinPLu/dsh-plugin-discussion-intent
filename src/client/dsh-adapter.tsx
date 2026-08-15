@@ -9,7 +9,7 @@ import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
-import { discussionRailRows, intensityName, type DiscussionState } from '../contract.ts'
+import { decodeDiscussionState, discussionRailRows, intensityName, type DiscussionState } from '../contract.ts'
 
 export const name = 'discussion-intent-client'
 export const inject = ['slots', 'locale']
@@ -22,6 +22,7 @@ const zh = {
   You: '你明确说过',
   Understanding: '当前理解',
   Next: '下一步',
+  Pending: '待确认',
 } as const
 
 type DiscussionLocaleKey = keyof typeof zh
@@ -34,6 +35,7 @@ const en: Record<DiscussionLocaleKey, string> = {
   You: 'You said',
   Understanding: 'Understanding',
   Next: 'Next',
+  Pending: 'Pending',
 }
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -98,7 +100,7 @@ export interface DiscussionRailProps extends PropsLocale<'discussionIntent'> {
   readonly state: DiscussionState | null | undefined
 }
 
-/** Exactly four read-only rows driven only by the plugin-owned Discussion state. */
+/** Four read-only rows when idle; an extra Pending row when a frame change awaits accept/reject. */
 export function DiscussionRail({ state, t }: DiscussionRailProps) {
   if (state?.active !== true) return null
   const saved = state.checkpoint.status === 'saved'
@@ -137,7 +139,11 @@ export function decodeLiveState(value: unknown): DiscussionState | undefined {
   if (typeof value !== 'object' || value === null) return undefined
   const candidate = value as { readonly active?: unknown; readonly revision?: unknown }
   if (candidate.active !== true || typeof candidate.revision !== 'number') return undefined
-  return value as DiscussionState
+  try {
+    return decodeDiscussionState(value)
+  } catch {
+    return undefined
+  }
 }
 
 export interface LiveDiscussionSnapshot {

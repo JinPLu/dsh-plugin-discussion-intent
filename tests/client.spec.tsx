@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ReactElement } from 'react'
-import { createDiscussionState, type DiscussionState } from '../src/contract.ts'
+import { applyDiscussionUpdate, createDiscussionState, type DiscussionState } from '../src/contract.ts'
 import { DiscussionRail, decodeLiveState, visibleLiveState } from '../src/client/index.tsx'
 
 const t = (key: string) => key
@@ -33,6 +33,28 @@ describe('Discussion Rail', () => {
     const flattened = (aside.props.children as readonly unknown[]).flat() as ReactElement[]
     const firstRow = flattened.find(child => child.type === 'section')!
     expect(firstRow.props['aria-label']).toBe('Focus')
+    const values = flattened.filter(child => child.type === 'section').map(row => {
+      const children = row.props.children as ReactElement[]
+      return children[1]?.props.children
+    })
+    expect(values[0]).toBe('No topic yet.')
+    expect(values).not.toContain('Topic to be distilled')
+  })
+
+  it('surfaces pending frame changes so accept/reject is visible without reading the log', () => {
+    const proposed = applyDiscussionUpdate(createDiscussionState({ id: 'rail-pending', intensity: 2, now: 1 }), {
+      expectedRevision: 1,
+      provisionalTitle: 'A proposed topic',
+    }, 2)
+    const element = DiscussionRail({ state: proposed, t })!
+    expect(renderRowCount(element)).toBe(5)
+    const aside = element.props.children as ReactElement
+    const flattened = (aside.props.children as readonly unknown[]).flat() as ReactElement[]
+    const pending = flattened.find(child => child.type === 'section' && child.props['aria-label'] === 'Pending')
+    expect(pending).toBeDefined()
+    const value = (pending!.props.children as ReactElement[])[1]?.props.children as string
+    expect(value).toContain('/discussion accept')
+    expect(value).toContain('/discussion reject')
   })
 })
 

@@ -88,29 +88,47 @@ async function harness() {
 }
 
 describe('real DSH host composition', () => {
-  it('starts from the bare slash command, wakes the model, persists sidecar state, and writes Markdown', async () => {
+  it('starts from the bare slash command without inferring a topic, persists sidecar state, and writes Markdown', async () => {
     const { root, ctx, session, agent } = await harness()
     expect(ctx.commands.list(agent).find(command => command.name === 'discussion')?.input?.hint)
-      .toBe('[1=fast | 2=default | 3=deep | off]')
+      .toBe('[1=fast | 2=default | 3=deep | accept <id> | reject <id> | off]')
 
     const result = await ctx.commands.execute(agent, '/discussion', new AbortController().signal)
-    expect(result?.result).toMatchObject({ kind: 'success', text: expect.stringContaining('2=default') })
+    expect(result?.result).toMatchObject({
+      kind: 'success',
+      text: expect.stringContaining('2=default'),
+    })
+    expect(String((result?.result as { text?: string } | undefined)?.text)).toContain('Intensity only')
+    expect(String((result?.result as { text?: string } | undefined)?.text)).not.toContain('inferred')
     const state = ctx.discussionIntent.get(agent)
-    expect(state).toMatchObject({ active: true, intensity: 2, revision: 1 })
-    expect(session.events.some(event => event.type === 'user/message' && event.data.source.kind === 'plugin')).toBe(true)
+    expect(state).toMatchObject({
+      active: true,
+      intensity: 2,
+      revision: 1,
+      provisionalTitle: 'Untitled',
+    })
+    expect(session.events.some(event => event.type === 'user/message' && event.data.source.kind === 'plugin')).toBe(false)
     // The session log stays untouched: no custom session events.
     expect(session.events.some(event => event.type.startsWith('discussion-intent/'))).toBe(false)
     const policy = (await ctx.systemPrompt.assemble({ agent, scope: agent })).sections
       .find(section => section.name === 'discussion-intent:policy')?.text
     expect(policy).toContain('Discussion Mode is active')
     expect(policy).toContain('native ask_user_question')
+    expect(policy).not.toContain('Infer the provisional topic')
     expect(state?.checkpoint.status).toBe('saved')
     const markdownPath = discussionMarkdownPath(root, '.dsh/discussions', 'discussion-plugin-test')
     expect(state?.checkpoint.status === 'saved' && state.checkpoint.filePath).toBe(markdownPath)
-    expect(await readFile(markdownPath, 'utf8')).toContain('# Topic to be distilled')
+    expect(await readFile(markdownPath, 'utf8')).toContain('# Untitled')
+    expect(await readFile(markdownPath, 'utf8')).not.toContain('Topic to be distilled')
     const jsonPath = discussionStateJsonPath(root, '.dsh/discussions', 'discussion-plugin-test')
     const durable = JSON.parse(await readFile(jsonPath, 'utf8'))
-    expect(durable).toMatchObject({ active: true, intensity: 2, revision: 1, checkpoint: { status: 'saved' } })
+    expect(durable).toMatchObject({
+      active: true,
+      intensity: 2,
+      revision: 1,
+      pendingFrameChanges: [],
+      checkpoint: { status: 'saved' },
+    })
   })
 
   it('binds exact direct-user quotes, updates the Markdown before replying, changes intensity, and pauses cleanly', async () => {
@@ -151,10 +169,14 @@ describe('real DSH host composition', () => {
     expect(result.isError).toBe(false)
     const updated = ctx.discussionIntent.get(agent)
     expect(updated?.humanFrame[0]?.statement).toBe('Do not make occlusion the main research topic; it is too rare in practice.')
+    expect(updated?.provisionalTitle).toBe('Untitled')
+    expect(updated?.focus.currentQuestion).toBe('No topic yet.')
+    expect(updated?.pendingFrameChanges.map(change => change.target)).toEqual(expect.arrayContaining(['title', 'goal', 'root-focus']))
     if (updated?.checkpoint.status !== 'saved') throw new Error('expected saved checkpoint')
     const markdown = await readFile(updated.checkpoint.filePath, 'utf8')
     expect(markdown).toContain('Occlusion is an optional stress test, not the thesis.')
     expect(markdown).toContain('Audit paired-truth feasibility.')
+    expect(markdown).toContain('## Pending Frame Changes')
 
     await ctx.commands.execute(agent, '/discussion 1', new AbortController().signal)
     expect(ctx.discussionIntent.get(agent)).toMatchObject({ active: true, intensity: 1, revision: 3 })
@@ -205,6 +227,12 @@ describe('durability across a full host restart', () => {
       historySummary: 'Work before the restart.',
     })
     expect(updated.checkpoint.status).toBe('saved')
+    expect(updated.provisionalTitle).toBe('Untitled')
+    expect(updated.pendingFrameChanges).toMatchObject([{
+      status: 'pending',
+      target: 'title',
+      proposed: 'Pre-restart title',
+    }])
 
     // Simulate a complete DSH exit and a new process reopening the same session.
     const second = new Context()
@@ -218,15 +246,28 @@ describe('durability across a full host restart', () => {
     const secondSession = second.sessions.create(SessionId('discussion-restart-test'), { meta: { cwd: root } })
     const secondAgent = buildAgent(secondSession)
     const restored = second.discussionIntent.get(secondAgent)
-    expect(restored).toMatchObject({ active: true, intensity: 3, revision: 2, checkpoint: { status: 'saved' } })
+    expect(restored).toMatchObject({
+      active: true,
+      intensity: 3,
+      revision: 2,
+      provisionalTitle: 'Untitled',
+      checkpoint: { status: 'saved' },
+    })
+    expect(restored?.pendingFrameChanges).toMatchObject([{
+      status: 'pending',
+      target: 'title',
+      proposed: 'Pre-restart title',
+    }])
     const policy = (await second.systemPrompt.assemble({ agent: secondAgent, scope: secondAgent })).sections
       .find(section => section.name === 'discussion-intent:policy')?.text
     expect(policy).toContain('Pre-restart title')
+    expect(policy).toContain('Pending Frame Changes')
     const continued = await second.discussionIntent.update(secondAgent, {
       expectedRevision: restored!.revision,
       historySummary: 'Continued after the restart.',
     })
     expect(continued).toMatchObject({ revision: 3, checkpoint: { status: 'saved' } })
+    expect(continued.provisionalTitle).toBe('Untitled')
     const durable = JSON.parse(await readFile(discussionStateJsonPath(root, '.dsh/discussions', 'discussion-restart-test'), 'utf8'))
     expect(durable.revision).toBe(3)
     expect(await readFile(discussionMarkdownPath(root, '.dsh/discussions', 'discussion-restart-test'), 'utf8'))

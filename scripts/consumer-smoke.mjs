@@ -186,7 +186,7 @@ export async function apply(ctx) {
   }
   ctx.effect(() => ctx.agents.register(agent))
   const descriptor = ctx.commands.list(agent).find(command => command.name === 'discussion')
-  if (descriptor?.input?.hint !== '[1=fast | 2=default | 3=deep | off]') {
+  if (descriptor?.input?.hint !== '[1=fast | 2=default | 3=deep | accept <id> | reject <id> | off]') {
     throw new Error('discussion command or clear intensity hint is missing')
   }
   const schema = ctx.tools.schemas(agent).find(tool => tool.name === 'discussion_update')
@@ -201,7 +201,8 @@ export async function apply(ctx) {
   }
   if (state.checkpoint.status !== 'saved') throw new Error('discussion Markdown was not saved')
   const markdown = await import('node:fs/promises').then(fs => fs.readFile(state.checkpoint.filePath, 'utf8'))
-  if (!markdown.includes('# Topic to be distilled')) throw new Error('discussion Markdown content is incomplete')
+  if (!markdown.includes('# Untitled')) throw new Error('discussion Markdown content is incomplete')
+  if (markdown.includes('Topic to be distilled')) throw new Error('discussion Markdown installed a fake topic')
   if (session.events.some(item => item.type.startsWith('discussion-intent/'))) {
     throw new Error('plugin leaked a custom session event into the DSH session log')
   }

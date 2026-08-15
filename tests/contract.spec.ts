@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  acceptPendingFrameChange,
   activateDiscussion,
   applyDiscussionUpdate,
   assertDiscussionState,
@@ -7,8 +8,11 @@ import {
   deactivateDiscussion,
   decodeDiscussionState,
   discussionRailRows,
+  NO_TOPIC_YET,
+  rejectPendingFrameChange,
   renderDiscussionMarkdown,
   renderDiscussionPolicy,
+  UNTITLED_TITLE,
 } from '../src/contract.ts'
 
 function opened(intensity: 1 | 2 | 3 = 2) {
@@ -16,11 +20,28 @@ function opened(intensity: 1 | 2 | 3 = 2) {
 }
 
 describe('portable Discussion state', () => {
-  it('uses bare /discussion semantics: default intensity and a model-owned provisional topic', () => {
+  it('keeps /discussion untitled: intensity only, no inferred topic', () => {
     const state = opened()
     expect(state).toMatchObject({ active: true, intensity: 2, revision: 1 })
-    expect(state.provisionalTitle).toBe('Topic to be distilled')
-    expect(renderDiscussionPolicy(state)).toContain('Infer the provisional topic and goal from the conversation')
+    expect(state.provisionalTitle).toBe(UNTITLED_TITLE)
+    expect(state.goal).toBe(NO_TOPIC_YET)
+    expect(state.focus.currentQuestion).toBe(NO_TOPIC_YET)
+    expect(state.pendingFrameChanges).toEqual([])
+    expect(renderDiscussionPolicy(state)).not.toContain('Infer the provisional topic')
+    expect(renderDiscussionPolicy(state)).toContain('Do not invent or install a topic')
+    expect(renderDiscussionMarkdown(state)).toMatch(/^# Untitled/u)
+    expect(renderDiscussionMarkdown(state)).not.toContain('Topic to be distilled')
+    expect(discussionRailRows(state)).toHaveLength(4)
+    expect(discussionRailRows(state)[0]).toMatchObject({ label: 'Focus', value: NO_TOPIC_YET })
+  })
+
+  it('decodes version-1 sidecars that omit pendingFrameChanges as an empty list', () => {
+    const raw = JSON.parse(JSON.stringify(opened())) as Record<string, unknown>
+    delete raw.pendingFrameChanges
+    const decoded = decodeDiscussionState(raw)
+    expect(decoded.pendingFrameChanges).toEqual([])
+    expect(decoded.version).toBe(1)
+    expect(() => assertDiscussionState(raw)).toThrow('Pending Frame Changes must be an array.')
   })
 
   it('keeps exact direct-user wording separate from model normalization', () => {
@@ -39,6 +60,7 @@ describe('portable Discussion state', () => {
       normalizedRestatement: 'Treat occlusion only as an optional stress test.',
       source: { eventSeq: 7, quote: 'Occlusion is rare in the real setting; do not make it the main topic.' },
     })
+    expect(next.provisionalTitle).toBe(UNTITLED_TITLE)
     const forged = structuredClone(next) as unknown as {
       humanFrame: { statement: string }[]
     }
@@ -46,18 +68,24 @@ describe('portable Discussion state', () => {
     expect(() => assertDiscussionState(forged)).toThrow('must equal source.quote')
   })
 
-  it('rejects a stale model update with one ordinary semantic revision', () => {
+  it('turns a title write into a pending change and rejects a stale revision', () => {
     const state = applyDiscussionUpdate(opened(), {
       expectedRevision: 1,
       provisionalTitle: 'OOD embodied experience generation',
     }, 2)
+    expect(state.provisionalTitle).toBe(UNTITLED_TITLE)
+    expect(state.pendingFrameChanges).toMatchObject([{
+      status: 'pending',
+      target: 'title',
+      proposed: 'OOD embodied experience generation',
+    }])
     expect(() => applyDiscussionUpdate(state, {
       expectedRevision: 1,
       goal: 'This update observed stale context.',
     }, 3)).toThrow('expected 1, current 2')
   })
 
-  it('retains the WorldModel correction, evidence map, rejected direction, and return focus across replay', () => {
+  it('retains WorldModel captures, evidence, and rejected options without silently installing a topic', () => {
     const corrected = applyDiscussionUpdate(opened(3), {
       expectedRevision: 1,
       provisionalTitle: 'Action-conditioned embodied World Model as a data engine',
@@ -124,6 +152,13 @@ describe('portable Discussion state', () => {
       },
       historySummary: 'Re-anchored the project away from occlusion and toward OOD data utility.',
     }, 10)
+    expect(corrected.provisionalTitle).toBe(UNTITLED_TITLE)
+    expect(corrected.goal).toBe('The result must have real domain value and innovation.')
+    expect(corrected.focus.currentQuestion).toBe('The result must have real domain value and innovation.')
+    expect(corrected.focus.level).toBe('project')
+    expect(corrected.pendingFrameChanges.map(change => change.target)).toEqual(['title', 'goal', 'root-focus'])
+    expect(discussionRailRows(corrected).some(row => row.label === 'Pending')).toBe(true)
+
     const refined = applyDiscussionUpdate(corrected, {
       expectedRevision: 2,
       optionUpdates: [{
@@ -152,6 +187,8 @@ describe('portable Discussion state', () => {
       },
       historySummary: 'Returned from wording work to the experiment plan and narrowed revisit/occlusion to stress tests.',
     }, 12)
+    expect(correctedAgain.focus.currentQuestion).toBe('The result must have real domain value and innovation.')
+    expect(correctedAgain.pendingFrameChanges.filter(change => change.status === 'pending' && change.target === 'root-focus')).toHaveLength(2)
     const resumed = activateDiscussion(deactivateDiscussion(correctedAgain, 13), {
       id: correctedAgain.id,
       intensity: correctedAgain.intensity,
@@ -174,10 +211,26 @@ describe('portable Discussion state', () => {
       'Action consequences are measurable and directly affect training data utility.',
       'A fixed downstream learner can test whether generated experience is useful.',
     ])
-    expect(replayed?.focus.returnTo).toBe('Which research direction has both scientific novelty and data-engine value?')
     expect(renderDiscussionPolicy(resumed)).toContain('Revisit and occlusion are optional stress tests, not the research thesis.')
+    expect(renderDiscussionPolicy(resumed)).toContain('[decision]')
+    expect(renderDiscussionPolicy(resumed)).toContain('especially rejection and decision frames')
+    expect(renderDiscussionPolicy(resumed)).toContain('New papers, tool results, and research evidence stay candidates')
     expect(renderDiscussionMarkdown(resumed)).toContain('Run the paired-truth feasibility gate')
-    expect(discussionRailRows(resumed)).toHaveLength(4)
+    expect(discussionRailRows(resumed).length).toBeGreaterThan(4)
+  })
+
+  it('applies a pending title only after accept, and keeps reject from rewriting the frame', () => {
+    const proposed = applyDiscussionUpdate(opened(), {
+      expectedRevision: 1,
+      provisionalTitle: 'Occlusion-centric World Model',
+    }, 2)
+    expect(proposed.provisionalTitle).toBe(UNTITLED_TITLE)
+    const rejected = rejectPendingFrameChange(proposed, proposed.pendingFrameChanges[0]!.id, 3)
+    expect(rejected.provisionalTitle).toBe(UNTITLED_TITLE)
+    expect(rejected.pendingFrameChanges[0]?.status).toBe('rejected')
+    const accepted = acceptPendingFrameChange(proposed, proposed.pendingFrameChanges[0]!.id, 4)
+    expect(accepted.provisionalTitle).toBe('Occlusion-centric World Model')
+    expect(accepted.pendingFrameChanges[0]?.status).toBe('accepted')
   })
 
   it('pauses and resumes with the previous intensity unless the user selects another', () => {

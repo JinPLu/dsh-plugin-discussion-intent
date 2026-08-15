@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { createDiscussionState } from '../src/contract.ts'
@@ -124,6 +124,24 @@ describe('validation reporting on real reads and writes', () => {
       .toMatchObject({ id: 'discussion-sidecar-nested' })
     expect(discussionSidecarRevisionSync(root, 'checkpoints/deep/nested', 'discussion-sidecar-nested'))
       .toEqual(expect.any(Number))
+  })
+
+  it('decodes an older version-1 sidecar that omitted pendingFrameChanges', async () => {
+    const root = await makeWorkspace()
+    const state = createDiscussionState({ id: 'discussion-sidecar-legacy', intensity: 2, now: 1 })
+    const saved = await writeDiscussionSidecar(root, 'checkpoints', 'discussion-sidecar-legacy', state)
+    expect(saved.checkpoint.status).toBe('saved')
+    const jsonPath = discussionStateJsonPath(root, 'checkpoints', 'discussion-sidecar-legacy')
+    const raw = JSON.parse(await readFile(jsonPath, 'utf8')) as Record<string, unknown>
+    delete raw.pendingFrameChanges
+    await writeFile(jsonPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf8')
+    expect(await readDiscussionSidecar(root, 'checkpoints', 'discussion-sidecar-legacy')).toMatchObject({
+      id: 'discussion-sidecar-legacy',
+      pendingFrameChanges: [],
+    })
+    expect(readDiscussionSidecarSync(root, 'checkpoints', 'discussion-sidecar-legacy')).toMatchObject({
+      pendingFrameChanges: [],
+    })
   })
 
   it('never creates the escape target outside the workspace', async () => {

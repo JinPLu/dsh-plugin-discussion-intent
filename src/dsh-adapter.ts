@@ -8,19 +8,22 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-commands'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import z from '@deepseek-ai/schemastery'
 import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import {
+  acceptPendingFrameChange,
   activateDiscussion,
+  activePendingFrameChanges,
   applyDiscussionUpdate,
   deactivateDiscussion,
   intensityName,
   parseIntensity,
+  rejectPendingFrameChange,
   renderDiscussionPolicy,
+  UNTITLED_TITLE,
   withCheckpoint,
   type CaptureRequest,
   type DiscussionFocus,
@@ -66,7 +69,8 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-const USAGE = '/discussion [1=fast | 2=default | 3=deep] or /discussion off'
+const USAGE = '/discussion [1=fast | 2=default | 3=deep] or /discussion accept <id> or /discussion reject <id> or /discussion off'
+const COMMAND_HINT = '[1=fast | 2=default | 3=deep | accept <id> | reject <id> | off]'
 const HUMAN_FRAME_KINDS = ['goal', 'constraint', 'criterion', 'preference', 'decision', 'rejection', 'non-goal'] as const
 const FOCUS_LEVELS = ['project', 'direction', 'mechanism', 'experiment', 'decision'] as const
 const OPTION_STATUSES = ['open', 'favored', 'rejected'] as const
@@ -88,6 +92,7 @@ interface ToolValue {
   readonly intensity: number
   readonly title: string
   readonly saveStatus: 'saved' | 'error'
+  readonly pendingChangeIds: string[]
   readonly filePath?: string
   readonly message?: string
 }
@@ -204,6 +209,18 @@ export class DiscussionIntentController extends Service {
     return this.commit(agent, applyDiscussionUpdate(current, update, Date.now()))
   }
 
+  async accept(agent: Agent, id: string): Promise<DiscussionState> {
+    const current = this.get(agent)
+    if (current === undefined) throw new Error('No Discussion state exists. Use /discussion first.')
+    return this.commit(agent, acceptPendingFrameChange(current, id, Date.now()))
+  }
+
+  async reject(agent: Agent, id: string): Promise<DiscussionState> {
+    const current = this.get(agent)
+    if (current === undefined) throw new Error('No Discussion state exists. Use /discussion first.')
+    return this.commit(agent, rejectPendingFrameChange(current, id, Date.now()))
+  }
+
   private async commit(agent: Agent, state: DiscussionState): Promise<DiscussionState> {
     const session = agent.session
     const cwd = session.header.cwd
@@ -226,19 +243,6 @@ export class DiscussionIntentController extends Service {
   }
 }
 
-function wakeDiscussion(agent: Agent, state: DiscussionState): void {
-  const text = [
-    `Discussion Mode is active at ${String(state.intensity)}=${intensityName(state.intensity)}.`,
-    'Infer the provisional topic and goal from the conversation so far.',
-    'Use discussion_update before the substantive reply so the discussion checkpoint is current.',
-    'If a material preference or boundary is genuinely ambiguous, ask one question with the native ask_user_question tool; otherwise begin the discussion directly.',
-  ].join(' ')
-  agent.steer(createUserMessage({
-    content: [{ type: 'text', text }],
-    source: { kind: 'plugin', plugin: 'discussion-intent', form: 'notice', summary: 'Discussion Mode activated' },
-  }))
-}
-
 function checkpointSuffix(state: DiscussionState): string {
   if (state.checkpoint.status === 'saved') return `Saved: ${state.checkpoint.filePath}`
   if (state.checkpoint.status === 'error') return `Markdown not saved: ${state.checkpoint.message}`
@@ -248,11 +252,11 @@ function checkpointSuffix(state: DiscussionState): string {
 function registerTool(ctx: Context, controller: DiscussionIntentController): void {
   ctx.tools.register(defineTool({
     name: 'discussion_update',
-    description: 'Update the active Discussion state before a substantive discussion reply. Preserve user constraints, current focus, rejected directions, evidence, synthesis, and next step. Direct-user captures must quote an exact same-session user message.',
+    description: 'Update the active Discussion state before a substantive discussion reply. Capture quoted user statements, add candidate options or evidence, and revise the provisional interpretation. Title, goal, and root-focus writes become Pending Frame Changes; they do not apply until /discussion accept <id>. Direct-user captures must quote an exact same-session user message. supersedeStatementIds requires a new same-session proving quote in the same call.',
     parameters: {
       expectedRevision: { type: 'integer', required: true, description: 'Current Discussion revision shown in the system policy.' },
-      provisionalTitle: { type: 'string', description: 'Short model-owned working title inferred from the conversation.' },
-      goal: { type: 'string', description: 'The outcome this discussion should converge toward.' },
+      provisionalTitle: { type: 'string', description: 'Proposed working title. Becomes a Pending Frame Change; it does not replace the current title.' },
+      goal: { type: 'string', description: 'Proposed outcome. Becomes a Pending Frame Change; it does not replace the current goal.' },
       captures: {
         type: 'array',
         description: 'Exact excerpts from direct user messages. Omit eventSeq to bind the latest matching direct-user message.',
@@ -267,9 +271,10 @@ function registerTool(ctx: Context, controller: DiscussionIntentController): voi
           },
         },
       },
-      supersedeStatementIds: { type: 'array', items: { type: 'string' }, description: 'Earlier statement ids made obsolete by later direct user evidence.' },
+      supersedeStatementIds: { type: 'array', items: { type: 'string' }, description: 'Earlier statement ids made obsolete by a new same-session proving quote in this call.' },
       focus: {
         type: 'object',
+        description: 'Proposed root focus. Becomes a Pending Frame Change; it does not overwrite the locked question.',
         additionalProperties: false,
         properties: {
           currentQuestion: { type: 'string', required: true },
@@ -279,7 +284,7 @@ function registerTool(ctx: Context, controller: DiscussionIntentController): voi
       },
       optionUpdates: {
         type: 'array',
-        description: 'Incremental upserts for meaningful alternatives and their evidence.',
+        description: 'Incremental upserts for candidate alternatives and their evidence. Candidates stay candidates; promoting one to the root question is a pending change.',
         items: {
           type: 'object',
           additionalProperties: false,
@@ -313,15 +318,21 @@ function registerTool(ctx: Context, controller: DiscussionIntentController): voi
           intensity: { type: 'integer', required: true },
           title: { type: 'string', required: true },
           saveStatus: { type: 'string', required: true, enum: ['saved', 'error'] },
+          pendingChangeIds: { type: 'array', required: true, items: { type: 'string' } },
           filePath: { type: 'string' },
           message: { type: 'string' },
         },
       },
       render: (_args, value: ToolValue) => [{
         type: 'text',
-        text: value.saveStatus === 'saved'
-          ? `Discussion updated to revision ${String(value.revision)} and saved to ${value.filePath ?? 'the workspace checkpoint'}.`
-          : `Discussion updated to revision ${String(value.revision)}, but Markdown was not saved: ${value.message ?? 'unknown error'}.`,
+        text: [
+          value.saveStatus === 'saved'
+            ? `Discussion updated to revision ${String(value.revision)} and saved to ${value.filePath ?? 'the workspace checkpoint'}.`
+            : `Discussion updated to revision ${String(value.revision)}, but Markdown was not saved: ${value.message ?? 'unknown error'}.`,
+          value.pendingChangeIds.length === 0
+            ? ''
+            : ` Pending Frame Changes: ${value.pendingChangeIds.join(', ')}. Use /discussion accept <id> or /discussion reject <id>.`,
+        ].join(''),
       }],
     },
     execute: async (args, exec): Promise<ToolValue> => {
@@ -332,6 +343,7 @@ function registerTool(ctx: Context, controller: DiscussionIntentController): voi
         intensity: state.intensity,
         title: state.provisionalTitle,
         saveStatus: state.checkpoint.status === 'saved' ? 'saved' : 'error',
+        pendingChangeIds: activePendingFrameChanges(state).map(change => change.id),
         ...(state.checkpoint.status === 'saved' ? { filePath: state.checkpoint.filePath } : {}),
         ...(state.checkpoint.status === 'error' ? { message: state.checkpoint.message, ...(state.checkpoint.filePath === undefined ? {} : { filePath: state.checkpoint.filePath }) } : {}),
       }
@@ -454,8 +466,8 @@ export function apply(ctx: Context, rawConfig: Config): void {
 
   ctx.commands.register({
     name: 'discussion',
-    description: 'start, tune, resume, or leave Discussion Mode',
-    input: { hint: '[1=fast | 2=default | 3=deep | off]' },
+    description: 'start, tune, resume, accept or reject a pending change, or leave Discussion Mode',
+    input: { hint: COMMAND_HINT },
     handler: async ({ agent, rawInput }) => {
       const input = rawInput.trim()
       if (input === 'off') {
@@ -463,14 +475,34 @@ export function apply(ctx: Context, rawConfig: Config): void {
         if (state === undefined || state.active) return { kind: 'success', text: 'Discussion Mode is not active.' }
         return { kind: 'success', text: `Discussion Mode paused. ${checkpointSuffix(state)}` }
       }
+      const acceptMatch = /^accept\s+(\S+)$/u.exec(input)
+      if (acceptMatch?.[1] !== undefined) {
+        try {
+          const state = await controller.accept(agent, acceptMatch[1])
+          return { kind: 'success', text: `Pending Frame Change accepted: ${acceptMatch[1]}. ${checkpointSuffix(state)}` }
+        } catch (error: unknown) {
+          return { kind: 'error', text: error instanceof Error ? error.message : String(error) }
+        }
+      }
+      const rejectMatch = /^reject\s+(\S+)$/u.exec(input)
+      if (rejectMatch?.[1] !== undefined) {
+        try {
+          const state = await controller.reject(agent, rejectMatch[1])
+          return { kind: 'success', text: `Pending Frame Change rejected: ${rejectMatch[1]}. ${checkpointSuffix(state)}` }
+        } catch (error: unknown) {
+          return { kind: 'error', text: error instanceof Error ? error.message : String(error) }
+        }
+      }
       const current = controller.get(agent)
       const intensity = input === '' ? current?.intensity ?? config.defaultIntensity : parseIntensity(input)
       if (intensity === undefined) return { kind: 'error', text: `Usage: ${USAGE}` }
       const state = await controller.activate(agent, intensity)
-      wakeDiscussion(agent, state)
+      const topicNote = state.provisionalTitle === UNTITLED_TITLE
+        ? 'No topic yet. The next user message starts the discussion.'
+        : `Title unchanged: ${state.provisionalTitle}.`
       return {
         kind: 'success',
-        text: `Discussion Mode: ${String(state.intensity)}=${intensityName(state.intensity)}. The topic will be inferred from context. Use /discussion off to leave. ${checkpointSuffix(state)}`,
+        text: `Discussion Mode: ${String(state.intensity)}=${intensityName(state.intensity)}. Intensity only. ${topicNote} Use /discussion off to leave. ${checkpointSuffix(state)}`,
       }
     },
   })

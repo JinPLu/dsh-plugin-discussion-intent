@@ -15,11 +15,11 @@
 | 部分 | 作用 | 用户可见结果 |
 | --- | --- | --- |
 | `/discussion` 命令 | 开始、切换强度、退出或恢复讨论 | `/discussion [1=fast | 2=default | 3=deep]` 与 `/discussion off` |
-| Discussion policy | 系统提示策略段，根据档位约束模型的讨论方法 | 模型提炼主题、守住目标，并在合适时收敛 |
-| `discussion_update` | 在实质回复前更新紧凑状态 | 约束、焦点、证据、结论和下一步不会随上下文漂移 |
+| Discussion policy | 系统提示策略段，根据档位约束模型的讨论方法 | 不推断主题；一次一问；守住已记录否定与决定，并在合适时收敛 |
+| `discussion_update` | 在实质回复前更新紧凑状态 | 理解可写；建议、下一步和 favored 不得与有效否定矛盾；人类 decision/goal 原话安装空 Focus |
 | 插件侧车文件 | 让讨论可续、过程可查的权威状态（JSON）与可读检查点（Markdown） | `.dsh/discussions/<session-id>.json` / `.md` |
-| Web Rail 通道 | 插件通过 `webServer` 注册的 HTTP 快照 + SSE 推送 | 四行只读 Rail 实时对应当前会话状态 |
-| 四行 Rail | 只读呈现 Focus / You / Understanding / Next | 用户一眼发现偏题或误解 |
+| Web Rail 通道 | 插件通过 `webServer` 注册的 HTTP 快照 + SSE 推送 | 空闲四行 Rail，有 Pending 时多一行，实时对应当前会话状态 |
+| Rail | 只读呈现 Focus / You / Understanding / Next，Pending 时五行 | You 为全部 active 否定与决定（否则退回其他原话）；用户一眼发现偏题或误解 |
 
 ## 使用的 DSH 公共接口（rc.6）
 
@@ -34,11 +34,12 @@
 
 运行时只保持服务于有效讨论的信息：
 
-- 暂定主题、目标和讨论强度；
+- 暂定标题、目标和讨论强度；人类 decision/goal 原话可安装空的 Focus/Goal，模型改题仍走 Pending；
 - 有原话依据的用户约束与偏好（`statement` 恒等于来源消息中的原文片段）；
 - 当前焦点、问题层级和返回点；
+- 待确认的框架变更（Pending Frame Changes）；
 - 候选方案、关键证据、状态与否定理由；
-- 当前理解、建议、开放问题和下一步；
+- 当前理解、建议、开放问题和下一步（建议/下一步/favored 不得与 active 否定矛盾）；
 - 简短的关键转折历史与保存状态。
 
 用户无需管理这些字段。它们由模型从对话中维护，目的是防止遗忘、重复和偏离，而不是为讨论增加审批流程。
