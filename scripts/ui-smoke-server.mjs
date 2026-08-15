@@ -18,7 +18,12 @@ const port = process.env.DSH_SMOKE_PORT || '63590'
 function dshArguments(args) {
   return dshRepository
     ? ['--dir', dshRepository, 'dsh', ...args]
-    : ['dlx', `@deepseek-ai/dsh@${dshVersion}`, ...args]
+    : [
+        'dlx',
+        '--allow-build=node-pty,@deepseek-ai/dsh-subprocess-local,koffi,esbuild',
+        `@deepseek-ai/dsh@${dshVersion}`,
+        ...args,
+      ]
 }
 
 function run(command, args, options = {}) {
