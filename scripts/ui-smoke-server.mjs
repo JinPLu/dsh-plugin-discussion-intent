@@ -20,7 +20,10 @@ function dshArguments(args) {
     ? ['--dir', dshRepository, 'dsh', ...args]
     : [
         'dlx',
-        '--allow-build=node-pty,@deepseek-ai/dsh-subprocess-local,koffi,esbuild',
+        '--allow-build=node-pty',
+        '--allow-build=@deepseek-ai/dsh-subprocess-local',
+        '--allow-build=koffi',
+        '--allow-build=esbuild',
         `@deepseek-ai/dsh@${dshVersion}`,
         ...args,
       ]
