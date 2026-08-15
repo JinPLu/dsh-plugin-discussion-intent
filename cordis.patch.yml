@@ -1,13 +1,12 @@
-# Safe to install before the core seams land. Disabled by default so a profile
-# never advertises an unavailable discussion contract.
+# Pre-release composition used by consumer acceptance. Discussion Mode is a
+# plugin-internal service: this patch only mounts the plugin itself against the
+# public DSH 0.1.0-rc.6 surface (commands/sessions/system-prompt/tools plus the
+# optional webServer Rail transport) and never patches DSH or redefines its
+# global mode enum.
 - insert:
     - id: discussion-intent
       name: '@jinplu/dsh-plugin-discussion-intent'
       config:
-        enabled: false
-        requiredCapabilities:
-          - cas.v1
-          - records.v1
-          - source-attestation.v1
-          - brief-run-provenance.v1
-          - ui.slots.v1
+        enabled: true
+        defaultIntensity: 2
+        directory: .dsh/discussions

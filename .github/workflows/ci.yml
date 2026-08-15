@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
-          version: 10
+          version: 11.19.0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -25,3 +25,31 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: npm pack --dry-run
+
+  consumer-smoke:
+    name: Consumer smoke (${{ matrix.dsh.label }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dsh:
+          - label: minimum
+            version: 0.1.0-rc.6
+          - label: latest-release
+            version: latest
+          - label: canary
+            version: next
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm test:consumer
+        env:
+          DSH_SMOKE_DSH_VERSION: ${{ matrix.dsh.version }}

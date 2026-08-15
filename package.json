@@ -1,14 +1,33 @@
 {
   "name": "@jinplu/dsh-plugin-discussion-intent",
-  "version": "0.1.0",
-  "description": "Standalone DeepSeek Harness plugin for source-attested discussion intent, focus, and reviewable frame changes.",
+  "version": "1.0.0",
+  "description": "A native-feeling Discussion Mode for DeepSeek Harness with anti-drift state, a four-line rail, and automatic Markdown checkpoints.",
   "keywords": ["dsh", "dsh-plugin", "deepseek-harness", "discussion", "agent"],
   "license": "MIT",
   "author": "JinPLu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JinPLu/dsh-plugin-discussion-intent.git"
+  },
+  "homepage": "https://github.com/JinPLu/dsh-plugin-discussion-intent#readme",
+  "bugs": {
+    "url": "https://github.com/JinPLu/dsh-plugin-discussion-intent/issues"
+  },
+  "packageManager": "pnpm@11.19.0",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/types/index.d.ts",
-  "files": ["lib/", "cordis.patch.yml", "README.md", "LICENSE"],
+  "files": [
+    "lib/index.js",
+    "lib/invariant.js",
+    "lib/client.js",
+    "lib/contract.js",
+    "lib/types/**/*.d.ts",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "docs/"
+  ],
   "exports": {
     ".": {
       "types": "./lib/types/index.d.ts",
@@ -30,21 +49,78 @@
   },
   "dsh": {
     "bundle": { "patch": "./cordis.patch.yml" },
-    "client": { "inject": [], "platform": "web" }
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ],
+      "platform": "web"
+    }
   },
   "publishConfig": { "access": "public" },
   "engines": { "node": ">=22.0.0", "pnpm": ">=10.0.0" },
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.tests.json",
     "test": "vitest run",
     "build": "tsc -p tsconfig.json && tsdown -c tsdown.config.ts",
-    "pack:check": "pnpm build && npm pack --dry-run"
+    "pack:check": "pnpm build && npm pack --dry-run",
+    "test:consumer": "node scripts/consumer-smoke.mjs",
+    "prepare": "pnpm build"
   },
-  "peerDependencies": { "schemastery": "^3.18.0" },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh": ">=0.1.0-rc.6 <0.2.0-0",
+    "@deepseek-ai/dsh-agent": ">=0.1.0-rc.6 <0.2.0-0",
+    "@deepseek-ai/dsh-client-locale": ">=0.1.0-rc.6 <0.2.0-0",
+    "@deepseek-ai/dsh-client-runtime": ">=0.1.0-rc.6 <0.2.0-0",
+    "@deepseek-ai/dsh-client-ui-conversation": ">=0.1.0-rc.6 <0.2.0-0",
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.0-rc.6 <0.2.0-0",
+    "@deepseek-ai/dsh-commands": ">=0.1.0-rc.6 <0.2.0-0",
+    "@deepseek-ai/dsh-invariants": ">=0.1.0-rc.6 <0.2.0-0",
+    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.6 <0.2.0-0",
+    "@deepseek-ai/dsh-session": ">=0.1.0-rc.6 <0.2.0-0",
+    "@deepseek-ai/dsh-system-prompt": ">=0.1.0-rc.6 <0.2.0-0",
+    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.6 <0.2.0-0",
+    "react": "^18.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": { "optional": true },
+    "@deepseek-ai/dsh": { "optional": true },
+    "@deepseek-ai/dsh-agent": { "optional": true },
+    "@deepseek-ai/dsh-client-locale": { "optional": true },
+    "@deepseek-ai/dsh-client-runtime": { "optional": true },
+    "@deepseek-ai/dsh-client-ui-conversation": { "optional": true },
+    "@deepseek-ai/dsh-client-ui-slots": { "optional": true },
+    "@deepseek-ai/dsh-commands": { "optional": true },
+    "@deepseek-ai/dsh-invariants": { "optional": true },
+    "@deepseek-ai/dsh-llm": { "optional": true },
+    "@deepseek-ai/dsh-session": { "optional": true },
+    "@deepseek-ai/dsh-system-prompt": { "optional": true },
+    "@deepseek-ai/dsh-tools": { "optional": true },
+    "react": { "optional": true }
+  },
   "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-agent": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-locale": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-runtime": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-conversation": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-slots": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-commands": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-invariants": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-session": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-system-prompt": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": "0.1.0-rc.6",
     "@types/node": "^22.0.0",
-    "schemastery": "^3.18.0",
-    "tsdown": "^0.15.0",
+    "@types/react": "~18.3.1",
+    "react": "^18.2.0",
+    "tsdown": "^0.22.2",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"
   }

@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2024",
+    "jsx": "react-jsx",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "rootDir": "src",
@@ -16,7 +17,7 @@
     "verbatimModuleSyntax": true,
     "allowImportingTsExtensions": true,
     "rewriteRelativeImportExtensions": true,
-    "types": ["node"]
+    "types": ["node", "react"]
   },
   "include": ["src"]
 }
