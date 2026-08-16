@@ -18,6 +18,19 @@ const dshRepository = process.env.DSH_SMOKE_DSH_REPO
 const pluginId = '@jinplu/dsh-plugin-discussion-intent'
 const sessionId = 'discussion-consumer-smoke'
 
+function extractDumpEntry(dump, id) {
+  const match = dump.match(new RegExp(`^- id: ${id}\\n((?:  .*\\n)*)`, 'm'))
+  return match?.[0]
+}
+
+function assertPinnedSubagent(dump, id) {
+  const entry = extractDumpEntry(dump, id)
+  if (entry === undefined) throw new Error(`dump-config omitted ${id}`)
+  if (!/agentOptions:\n\s+provider: deepseek-official\n\s+model: deepseek-v4-flash/.test(entry)) {
+    throw new Error(`dump-config ${id} is not pinned to deepseek-official / deepseek-v4-flash\n${entry}`)
+  }
+}
+
 function dshArguments(args) {
   if (dshRepository !== undefined && dshRepository !== '') {
     return ['--dir', dshRepository, 'dsh', ...args]
@@ -292,6 +305,8 @@ try {
   const dump = await run('pnpm', dshArguments(['--profile', 'web', '--dump-config']), { env })
   if (!dump.includes(`name: '${pluginId}'`)) throw new Error('dump-config omitted the installed plugin')
   if (!dump.includes('defaultIntensity: 2')) throw new Error('dump-config omitted the default intensity')
+  assertPinnedSubagent(dump, 'tool-subagent')
+  assertPinnedSubagent(dump, 'tool-subagent-fork')
 
   const installedPackageRoot = join(dshHome, 'profiles/web/node_modules', pluginId)
   const installedHost = await readFile(join(installedPackageRoot, 'lib/index.js'), 'utf8')

@@ -1,9 +1,10 @@
 /**
  * DSH host adapter: the single named boundary where this plugin imports DSH
  * host packages and wires host services (slash command, model tool,
- * system-prompt section, Web Rail transport, session read). The public
- * package entry (`index.ts`) is a thin facade over this module. Domain logic
- * stays DSH-independent in `contract.ts`, `sidecar.ts`, and `capabilities.ts`.
+ * system-prompt section, Web Rail transport, optional subagents wrap,
+ * session read). The public package entry (`index.ts`) is a thin facade over
+ * this module. Domain logic stays DSH-independent in `contract.ts`,
+ * `sidecar.ts`, and `capabilities.ts`.
  */
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -372,6 +373,60 @@ function railSnapshot(state: DiscussionState | undefined): RailSnapshot {
   return state ?? { active: false }
 }
 
+const DEFAULT_CHILD_AGENT_OPTIONS = {
+  provider: 'deepseek-official',
+  model: 'deepseek-v4-flash',
+} as const
+
+interface ChildAgentOptionsLike {
+  readonly provider?: string
+  readonly model?: string
+  readonly maxTokens?: number
+}
+
+interface SubagentStartRequestLike {
+  readonly agentOptions?: ChildAgentOptionsLike
+}
+
+interface ContinuableStartSpecLike {
+  readonly request: SubagentStartRequestLike
+}
+
+interface SubagentsLike {
+  start: (provider: string, request: SubagentStartRequestLike) => unknown
+  startContinuable: (spec: ContinuableStartSpecLike) => unknown
+}
+
+function withDefaultChildAgentOptions<T extends SubagentStartRequestLike>(request: T): T {
+  return {
+    ...request,
+    agentOptions: {
+      ...DEFAULT_CHILD_AGENT_OPTIONS,
+      ...request.agentOptions,
+    },
+  }
+}
+
+/**
+ * Live pin for web and other profiles that remount subagent tools inside
+ * agent presets. Host-plane `cordis.patch.yml` rows stay as defense-in-depth.
+ */
+function wrapSubagents(ctx: Context): () => void {
+  const subagents = ctx.get('subagents') as SubagentsLike | undefined
+  if (subagents === undefined) return () => undefined
+  const start = subagents.start.bind(subagents)
+  const startContinuable = subagents.startContinuable.bind(subagents)
+  subagents.start = (provider, request) => start(provider, withDefaultChildAgentOptions(request))
+  subagents.startContinuable = spec => startContinuable({
+    ...spec,
+    request: withDefaultChildAgentOptions(spec.request),
+  })
+  return () => {
+    subagents.start = start
+    subagents.startContinuable = startContinuable
+  }
+}
+
 function registerRailTransport(ctx: Context, controller: DiscussionIntentController): () => void {
   const webServer = ctx.get('webServer') as WebServerLike | undefined
   if (webServer === undefined) return () => undefined
@@ -513,6 +568,13 @@ export function apply(ctx: Context, rawConfig: Config): void {
     railCtx.effect(
       () => registerRailTransport(railCtx, controller),
       'discussion-intent:rail-transport',
+    )
+  })
+
+  ctx.inject(['subagents'], subagentCtx => {
+    subagentCtx.effect(
+      () => wrapSubagents(subagentCtx),
+      'discussion-intent:subagent-flash',
     )
   })
 }

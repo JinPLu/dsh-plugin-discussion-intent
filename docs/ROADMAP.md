@@ -1,8 +1,8 @@
 # Roadmap
 
-目标是在交互最简单的前提下，交付完整而强力的日常 Discussion Mode：帮助用户在复杂问题尚未完全想清时守住目标、边界与当前焦点，并把探索收敛为有依据的下一步。它不是通用长期记忆；可恢复的讨论检查点是这套意图校准机制的可靠性保障。实现只依赖已发布的 DSH `0.1.0-rc.6` 公共接口。`v1.0.0` 已发布；后续版本在 npm 发布、Git tag 与 GitHub Release 之前必须先完成发布验收。
+交付完整而强力的日常 Discussion Mode：守住目标、边界与当前焦点，并把探索收敛为有依据的下一步。只依赖已发布的 DSH `0.1.0-rc.6` 公共接口。`v1.0.0` 已发布；后续版本须先完成发布验收。
 
-官方 rc.6 没有原生 `contributeRun`。插件不能像原生 Discussion Mode 那样冻结一次宿主 Research Run；它只能拒绝让这些结果改写已锁定的问题。
+官方 rc.6 没有原生 `contributeRun`。研究证据不能改写已锁定的问题。
 
 ## 第一阶段：核心纵向闭环
 
@@ -19,11 +19,13 @@
 - [x] 空闲时四行只读 Web Rail；You 露出全部 active 否定与决定；有 Pending 时单独露出，不显示假主题
 - [x] 每次实质更新先写 Markdown 再写 JSON 侧车（`.dsh/discussions/*.md` / `.json`），`pendingFrameChanges` 落在 version `1`，旧文件缺省为 `[]`
 - [x] 保存失败可见，不静默丢失讨论检查点
+- [x] 公开 `subagents` wrap：该 profile 内所有子代理默认 `deepseek-official` / `deepseek-v4-flash`（bundle overlay 仅覆盖 host-plane）
 
 ## 第二阶段：对已发布 rc.6 的真实消费验收
 
 - [x] 从生成的真实 tarball 安装到全新临时 DSH profile
 - [x] `dump-config` 能看到插件及默认强度
+- [x] `dump-config` 能看到两行 subagent 的 `agentOptions` 为 `deepseek-official` / `deepseek-v4-flash`
 - [x] DSH 实际 boot 成功，不依赖开发仓库中未打包的文件
 - [x] `/discussion` 命令、`discussion_update` 工具 schema、policy 段 live smoke 全部通过
 - [x] Markdown 与 JSON 侧车在临时工作区真实生成且内容正确
@@ -41,11 +43,10 @@
 - [x] peer compatibility 范围与消费矩阵一致（当前 `>=0.1.0-rc.6 <0.2.0-0`）
 - [x] `v1.0.0` 的 npm provenance、Git tag、GitHub Release 和包版本一致
 - [x] `v1.1.0` 的 npm provenance、Git tag、GitHub Release 和包版本一致
-- [ ] `v1.1.1` 的 npm provenance、Git tag、GitHub Release 和包版本一致
+- [x] `v1.1.1` 的 npm provenance、Git tag、GitHub Release 和包版本一致
+- [ ] `v1.2.0` 的 npm provenance、Git tag、GitHub Release 和包版本一致
 - [ ] 真实用户 profile 再执行一次安装、启动、开始讨论、切档、落盘和退出验收
 
 ## 后续增强原则
 
-发布后的增强必须直接改善讨论质量或日常使用体验，例如更好的断点恢复、Rail 呈现或讨论文件浏览。可选增强要独立探测、独立降级，不能迫使用户配置额外服务，也不能阻断 `/discussion` 核心闭环。
-
-不会预先加入复杂审批、哈希校验或用户不可见的抽象层。只有真实问题和可验证收益出现时，才扩展运行时设计。在官方 rc.6 上，也不会假装已经具备原生 Research Run 冻结。
+只做能直接改善讨论质量或日常使用的增强。可选能力须独立探测、独立降级，不能阻断 `/discussion` 核心闭环。官方 rc.6 上不假装已有原生 Research Run 冻结。

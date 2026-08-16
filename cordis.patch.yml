@@ -1,8 +1,6 @@
-# Pre-release composition used by consumer acceptance. Discussion Mode is a
-# plugin-internal service: this patch only mounts the plugin itself against the
-# public DSH 0.1.0-rc.6 surface (commands/sessions/system-prompt/tools plus the
-# optional webServer Rail transport) and never patches DSH or redefines its
-# global mode enum.
+# Host-plane defense-in-depth (not a DSH source change): mount Discussion Mode
+# and pin tool-subagent / tool-subagent-fork. Web remounts live tools inside
+# agent presets; the live pin is the public subagents wrap in the adapter.
 - insert:
     - id: discussion-intent
       name: '@jinplu/dsh-plugin-discussion-intent'
@@ -10,3 +8,21 @@
         enabled: true
         defaultIntensity: 2
         directory: .dsh/discussions
+
+- id: tool-subagent
+  config:
+    provider: spawn
+    toolName: subagent
+    backgroundMode: continuable
+    agentOptions:
+      provider: deepseek-official
+      model: deepseek-v4-flash
+
+- id: tool-subagent-fork
+  config:
+    provider: fork
+    toolName: subagent_fork
+    backgroundMode: one-shot
+    agentOptions:
+      provider: deepseek-official
+      model: deepseek-v4-flash
