@@ -199,7 +199,7 @@ export async function apply(ctx) {
   }
   ctx.effect(() => ctx.agents.register(agent))
   const descriptor = ctx.commands.list(agent).find(command => command.name === 'discussion')
-  if (descriptor?.input?.hint !== '[1=fast | 2=default | 3=deep | accept <id> | reject <id> | off]') {
+  if (descriptor?.input?.hint !== '[1=fast | 2=default | 3=deep | model [<provider>/<id>] | accept <id> | reject <id> | off]') {
     throw new Error('discussion command or clear intensity hint is missing')
   }
   const schema = ctx.tools.schemas(agent).find(tool => tool.name === 'discussion_update')
