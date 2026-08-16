@@ -109,9 +109,11 @@ describe('WorldModel / Codex-thread anti-drift', () => {
     expect(state?.humanFrame.map(frame => frame.statement)).toEqual(LOCKS.map(lock => lock.quote))
     expect(state?.humanFrame.every(frame => frame.status === 'active')).toBe(true)
     expect(state?.focus.currentQuestion).toBe(LOCKS[2]!.quote)
-    expect(state?.focus.level).toBe('decision')
+    expect(state?.rootFocus.currentQuestion).toBe(LOCKS[2]!.quote)
+    expect(state?.focus.level).toBe('project')
     const you = discussionRailRows(state!).find(row => row.label === 'You')?.value
     expect(you).toContain(LOCKS[2]!.quote)
+    expect(you).toContain(LOCKS[3]!.quote)
     expect(you).toContain(LOCKS[5]!.quote)
     expect(state!.humanFrame.slice(-2).map(frame => frame.kind)).toEqual(['constraint', 'rejection'])
     const policy = renderDiscussionPolicy(state!)
@@ -156,6 +158,7 @@ describe('WorldModel / Codex-thread anti-drift', () => {
     }, 3)
     expect(researched.provisionalTitle).toBe(UNTITLED_TITLE)
     expect(researched.focus.currentQuestion).toBe(LOCKS[2]!.quote)
+    expect(researched.rootFocus.currentQuestion).toBe(LOCKS[2]!.quote)
     expect(researched.options.map(option => option.id)).toEqual(['occlusion-memory', 'active-interaction'])
     expect(researched.options.every(option => option.status === 'open')).toBe(true)
     expect(researched.pendingFrameChanges).toMatchObject([
@@ -163,7 +166,17 @@ describe('WorldModel / Codex-thread anti-drift', () => {
       { status: 'pending', target: 'root-focus', proposed: 'How should occlusion and active interaction become the root experiment?' },
     ])
     expect(renderDiscussionPolicy(researched)).toContain('Occlusion and revisit are optional stress tests, not the Topic.')
+    expect(renderDiscussionPolicy(researched)).toContain('It cannot silently replace title, goal, root focus')
+    expect(renderDiscussionPolicy(researched)).toContain('must not auto-lock the root')
+    expect(renderDiscussionPolicy(researched)).not.toContain('Ask one question at a time')
     expect(discussionRailRows(researched).find(row => row.label === 'Pending')?.value).toContain('/discussion accept')
+    expect(discussionRailRows(researched).map(row => row.label)).toEqual([
+      'Focus',
+      'You',
+      'Understanding',
+      'Next',
+      'Pending',
+    ])
   })
 
   it('supersedes an old frame only with a new proving quote, and keeps the correction visible', () => {
@@ -260,7 +273,8 @@ describe('WorldModel / Codex-thread anti-drift', () => {
     })
     const afterLock = ctx.discussionIntent.get(agent)
     expect(afterLock?.focus.currentQuestion).toBe('可以，先落盘主线')
-    expect(afterLock?.focus.level).toBe('decision')
+    expect(afterLock?.rootFocus.currentQuestion).toBe(NO_TOPIC_YET)
+    expect(afterLock?.focus.level).toBe('project')
     const novelty = await ctx.tools.execute({
       callId: CallId('anti-drift-novelty'),
       name: 'discussion_update',
@@ -286,7 +300,8 @@ describe('WorldModel / Codex-thread anti-drift', () => {
     const afterResearch = ctx.discussionIntent.get(agent)
     expect(afterResearch?.provisionalTitle).toBe(UNTITLED_TITLE)
     expect(afterResearch?.focus.currentQuestion).toBe('可以，先落盘主线')
-    expect(afterResearch?.focus.level).toBe('decision')
+    expect(afterResearch?.rootFocus.currentQuestion).toBe(NO_TOPIC_YET)
+    expect(afterResearch?.focus.level).toBe('project')
     expect(afterResearch?.humanFrame.some(frame => frame.statement === '可以，先落盘主线' && frame.status === 'active')).toBe(true)
     expect(afterResearch?.pendingFrameChanges.some(change => change.target === 'root-focus' && change.status === 'pending')).toBe(true)
     const pendingId = afterResearch?.pendingFrameChanges.find(change => change.target === 'title')?.id
@@ -327,6 +342,7 @@ describe('WorldModel / Codex-thread anti-drift', () => {
     }, 3)
     expect(researched.provisionalTitle).toBe(UNTITLED_TITLE)
     expect(researched.focus.currentQuestion).toBe(LOCKS[2]!.quote)
+    expect(researched.rootFocus.currentQuestion).toBe(LOCKS[2]!.quote)
     expect(researched.pendingFrameChanges).toMatchObject([
       { status: 'pending', target: 'title', proposed: 'Occlusion-centric persistent interaction World Model' },
       { status: 'pending', target: 'root-focus', proposed: 'How should occlusion and active interaction become the root experiment?' },
@@ -357,6 +373,7 @@ describe('WorldModel / Codex-thread anti-drift', () => {
     }, 4)
     expect(cited.synthesis.nextStep).toBe(LOCKS[5]!.quote)
     expect(cited.focus.currentQuestion).toBe(LOCKS[2]!.quote)
+    expect(cited.rootFocus.currentQuestion).toBe(LOCKS[2]!.quote)
     const interpreted = applyDiscussionUpdate(researched, {
       expectedRevision: 3,
       synthesis: {
@@ -366,6 +383,7 @@ describe('WorldModel / Codex-thread anti-drift', () => {
     expect(interpreted.synthesis.interpretation).toContain('Occlusion')
     expect(interpreted.provisionalTitle).toBe(UNTITLED_TITLE)
     expect(interpreted.focus.currentQuestion).toBe(LOCKS[2]!.quote)
+    expect(interpreted.rootFocus.currentQuestion).toBe(LOCKS[2]!.quote)
     expect(interpreted.pendingFrameChanges).toMatchObject([
       { status: 'pending', target: 'title' },
       { status: 'pending', target: 'root-focus' },

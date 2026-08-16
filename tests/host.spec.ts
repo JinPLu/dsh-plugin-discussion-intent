@@ -36,8 +36,15 @@ function fakeWebServer() {
 }
 
 class MockRequest {
-  constructor(readonly url: string) {}
+  constructor(
+    readonly url: string,
+    readonly method = 'GET',
+    readonly body = '',
+  ) {}
   on() { return this }
+  async *[Symbol.asyncIterator]() {
+    if (this.body !== '') yield Buffer.from(this.body)
+  }
 }
 
 class MockResponse {
@@ -91,7 +98,7 @@ describe('real DSH host composition', () => {
   it('starts from the bare slash command without inferring a topic, persists sidecar state, and writes Markdown', async () => {
     const { root, ctx, session, agent } = await harness()
     expect(ctx.commands.list(agent).find(command => command.name === 'discussion')?.input?.hint)
-      .toBe('[1=fast | 2=default | 3=deep | accept <id> | reject <id> | off]')
+      .toBe('[1=fast | 2=default | 3=deep | model [<provider>/<id>] | accept <id> | reject <id> | off]')
 
     const result = await ctx.commands.execute(agent, '/discussion', new AbortController().signal)
     expect(result?.result).toMatchObject({
@@ -114,6 +121,10 @@ describe('real DSH host composition', () => {
       .find(section => section.name === 'discussion-intent:policy')?.text
     expect(policy).toContain('Discussion Mode is active')
     expect(policy).toContain('native ask_user_question')
+    expect(policy).toContain('Stage · settled · open forks')
+    expect(policy).toContain('benefit / cost / assumption / consequence')
+    expect(policy).toContain('Pending first')
+    expect(policy).not.toContain('Ask one question at a time')
     expect(policy).not.toContain('Infer the provisional topic')
     expect(state?.checkpoint.status).toBe('saved')
     const markdownPath = discussionMarkdownPath(root, '.dsh/discussions', 'discussion-plugin-test')
@@ -170,7 +181,8 @@ describe('real DSH host composition', () => {
     const updated = ctx.discussionIntent.get(agent)
     expect(updated?.humanFrame[0]?.statement).toBe('Do not make occlusion the main research topic; it is too rare in practice.')
     expect(updated?.provisionalTitle).toBe('Untitled')
-    expect(updated?.focus.currentQuestion).toBe('No topic yet.')
+    expect(updated?.focus.currentQuestion).toBe('Do not make occlusion the main research topic; it is too rare in practice.')
+    expect(updated?.rootFocus.currentQuestion).toBe('No topic yet.')
     expect(updated?.pendingFrameChanges.map(change => change.target)).toEqual(expect.arrayContaining(['title', 'goal', 'root-focus']))
     if (updated?.checkpoint.status !== 'saved') throw new Error('expected saved checkpoint')
     const markdown = await readFile(updated.checkpoint.filePath, 'utf8')
@@ -295,7 +307,12 @@ describe('Web Rail transport (optional webServer service)', () => {
     await route.handler(new MockRequest('/dsh/discussion-intent/state?sessionId=discussion-plugin-test'), snapshot)
     await new Promise(resolve => setImmediate(resolve))
     expect(snapshot.statusCode).toBe(200)
-    expect(JSON.parse(snapshot.writes.join(''))).toMatchObject({ active: true, intensity: 2, revision: 1 })
+    expect(JSON.parse(snapshot.writes.join(''))).toMatchObject({
+      active: true,
+      intensity: 2,
+      revision: 1,
+      subagent: { model: 'unset', effort: 'default', phase: 'next' },
+    })
 
     // Open an SSE stream, receive the current state, then receive the push.
     const stream = new MockResponse()
@@ -310,7 +327,203 @@ describe('Web Rail transport (optional webServer service)', () => {
     // Unknown session ids get the inactive shorthand, never an error stream.
     const unknown = new MockResponse()
     await route.handler(new MockRequest('/dsh/discussion-intent/state?sessionId=nope'), unknown)
-    await new Promise(resolve => setImmediate(resolve))
+    await new Promise(resolve => setTimeout(resolve, 120))
     expect(JSON.parse(unknown.writes.join(''))).toEqual({ active: false })
+  })
+
+  it('emits the current snapshot when /discussion repeats the same intensity', async () => {
+    const { ctx, webServer, agent } = await harness()
+    await ctx.commands.execute(agent, '/discussion 3', new AbortController().signal)
+    const route = webServer.routes[0]!
+    const stream = new MockResponse()
+    await route.handler(new MockRequest('/dsh/discussion-intent/events?sessionId=discussion-plugin-test'), stream)
+    await new Promise(resolve => setImmediate(resolve))
+    const before = stream.writes.length
+    const revision = ctx.discussionIntent.get(agent)!.revision
+    await ctx.commands.execute(agent, '/discussion 3', new AbortController().signal)
+    expect(ctx.discussionIntent.get(agent)?.revision).toBe(revision)
+    expect(stream.writes.length).toBeGreaterThan(before)
+    expect(stream.writes.join('')).toContain('"active":true')
+    expect(stream.writes.join('')).toContain('"intensity":3')
+  })
+
+  it('attaches the configured spawn model and default effort to the Rail snapshot', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-discussion-subagent-rail-'))
+    temporaryRoots.push(root)
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(CommandRuntime)
+    const webServer = fakeWebServer()
+    ctx.provide('webServer', webServer)
+    ctx.provide('settings', {
+      register() {
+        return {
+          get: () => ({ provider: 'deepseek-official', model: 'deepseek-v4-flash' }),
+          replace: async () => undefined,
+        }
+      },
+    })
+    ctx.provide('llm', {
+      listProviders: () => [],
+      listModels: async () => [],
+      resolveCallConfig: async () => ({ reasoningEffort: 'high' }),
+    })
+    await ctx.plugin(Object.assign((inner: Context) => {
+      apply(inner, { enabled: true, defaultIntensity: 2, directory: '.dsh/discussions' })
+    }, { inject }))
+    const session = ctx.sessions.create(SessionId('discussion-subagent-rail'), { meta: { cwd: root } })
+    const agent = buildAgent(session)
+    await ctx.commands.execute(agent, '/discussion 2', new AbortController().signal)
+    const route = webServer.routes[0]!
+    let body: { subagent?: { model?: string; effort?: string; phase?: string; provider?: string } } = {}
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const snapshot = new MockResponse()
+      await route.handler(new MockRequest('/dsh/discussion-intent/state?sessionId=discussion-subagent-rail'), snapshot)
+      await new Promise(resolve => setImmediate(resolve))
+      body = JSON.parse(snapshot.writes.join('')) as typeof body
+      if (body.subagent?.effort === 'high') break
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    expect(body).toMatchObject({
+      active: true,
+      subagent: { provider: 'deepseek-official', model: 'deepseek-v4-flash', effort: 'high', phase: 'next' },
+    })
+  })
+
+  it('does not push active:false over SSE while sessions.get is not ready', async () => {
+    const { webServer } = await harness()
+    const route = webServer.routes[0]!
+    const stream = new MockResponse()
+    await route.handler(new MockRequest('/dsh/discussion-intent/events?sessionId=not-ready-yet'), stream)
+    await new Promise(resolve => setTimeout(resolve, 120))
+    const body = stream.writes.join('')
+    expect(body).toContain(': waiting')
+    expect(body).not.toContain('data: {"active":false}')
+  })
+})
+
+const FLASH = { provider: 'deepseek-official', model: 'deepseek-v4-flash' } as const
+
+async function modelHarness() {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-discussion-model-'))
+  temporaryRoots.push(root)
+  const ctx = new Context()
+  await ctx.plugin(SessionStore)
+  await ctx.plugin(SystemPrompt)
+  await ctx.plugin(ToolRuntime)
+  await ctx.plugin(CommandRuntime)
+  const webServer = fakeWebServer()
+  ctx.provide('webServer', webServer)
+  ctx.provide('llm', {
+    listProviders: () => [{ id: 'deepseek-official', name: 'DeepSeek' }],
+    async listModels(provider: string) {
+      return [
+        { provider, id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash' },
+        { provider, id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro' },
+      ]
+    },
+  })
+  await ctx.plugin(Object.assign((inner: Context) => {
+    apply(inner, { enabled: true, defaultIntensity: 2, directory: '.dsh/discussions' })
+  }, { inject }))
+  const session = ctx.sessions.create(SessionId('discussion-model-test'), { meta: { cwd: root } })
+  const agent = buildAgent(session)
+  return { ctx, webServer, session, agent }
+}
+
+async function snapshotSubagent(route: CapturedRoute, sessionId: string) {
+  const snapshot = new MockResponse()
+  await route.handler(new MockRequest(`/dsh/discussion-intent/state?sessionId=${sessionId}`), snapshot)
+  await new Promise(resolve => setImmediate(resolve))
+  return JSON.parse(snapshot.writes.join('')) as {
+    readonly active?: boolean
+    readonly intensity?: number
+    readonly revision?: number
+    readonly subagent?: { readonly model?: string; readonly provider?: string; readonly phase?: string }
+  }
+}
+
+describe('subagent model slash and HTTP', () => {
+  it('lists the catalog from /discussion model without a model turn or intensity change', async () => {
+    const { ctx, webServer, session, agent } = await modelHarness()
+    await ctx.commands.execute(agent, '/discussion 3', new AbortController().signal)
+    const before = ctx.discussionIntent.get(agent)
+    const listed = await ctx.commands.execute(agent, '/discussion model', new AbortController().signal)
+    expect(listed?.result).toMatchObject({ kind: 'success' })
+    const text = String((listed?.result as { text?: string } | undefined)?.text)
+    expect(text).toContain('unset')
+    expect(text).toContain('deepseek-official/deepseek-v4-flash')
+    expect(text).toContain('deepseek-official/deepseek-v4-pro')
+    expect(ctx.discussionIntent.get(agent)?.intensity).toBe(3)
+    expect(ctx.discussionIntent.get(agent)?.revision).toBe(before?.revision)
+    expect(session.events.some(event => event.type.startsWith('discussion-intent/'))).toBe(false)
+    const route = webServer.routes[0]!
+    expect((await snapshotSubagent(route, 'discussion-model-test')).subagent?.model).toBe('unset')
+  })
+
+  it('does not pick a model on /discussion or /discussion 3', async () => {
+    const { ctx, webServer, agent } = await modelHarness()
+    await ctx.commands.execute(agent, '/discussion', new AbortController().signal)
+    await ctx.commands.execute(agent, '/discussion 3', new AbortController().signal)
+    const route = webServer.routes[0]!
+    expect((await snapshotSubagent(route, 'discussion-model-test')).subagent).toMatchObject({
+      model: 'unset',
+      phase: 'next',
+    })
+  })
+
+  it('persists /discussion model <provider>/<id> so the chip is no longer unset', async () => {
+    const { ctx, webServer, session, agent } = await modelHarness()
+    await ctx.commands.execute(agent, '/discussion', new AbortController().signal)
+    const set = await ctx.commands.execute(
+      agent,
+      '/discussion model deepseek-official/deepseek-v4-flash',
+      new AbortController().signal,
+    )
+    expect(set?.result).toMatchObject({ kind: 'success' })
+    expect(String((set?.result as { text?: string } | undefined)?.text)).toContain('deepseek-official/deepseek-v4-flash')
+    expect(session.events.some(event => event.type.startsWith('discussion-intent/'))).toBe(false)
+    const route = webServer.routes[0]!
+    expect(await snapshotSubagent(route, 'discussion-model-test')).toMatchObject({
+      active: true,
+      subagent: { provider: 'deepseek-official', model: 'deepseek-v4-flash', phase: 'next' },
+    })
+  })
+
+  it('serves the catalog and persists a chip POST that refreshes the overlay', async () => {
+    const { ctx, webServer, session, agent } = await modelHarness()
+    await ctx.commands.execute(agent, '/discussion 2', new AbortController().signal)
+    const route = webServer.routes[0]!
+
+    const catalog = new MockResponse()
+    await route.handler(new MockRequest('/dsh/discussion-intent/models'), catalog)
+    await new Promise(resolve => setImmediate(resolve))
+    expect(JSON.parse(catalog.writes.join(''))).toMatchObject({
+      models: [
+        { provider: 'deepseek-official', id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash' },
+        { provider: 'deepseek-official', id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro' },
+      ],
+    })
+
+    const stream = new MockResponse()
+    await route.handler(new MockRequest('/dsh/discussion-intent/events?sessionId=discussion-model-test'), stream)
+    await new Promise(resolve => setImmediate(resolve))
+    expect(stream.writes.join('')).toContain('"model":"unset"')
+
+    const post = new MockResponse()
+    await route.handler(
+      new MockRequest('/dsh/discussion-intent/subagent', 'POST', JSON.stringify(FLASH)),
+      post,
+    )
+    await new Promise(resolve => setImmediate(resolve))
+    expect(JSON.parse(post.writes.join(''))).toEqual({ ok: true, ...FLASH })
+    expect(stream.writes.join('')).toContain('"model":"deepseek-v4-flash"')
+    expect(await snapshotSubagent(route, 'discussion-model-test')).toMatchObject({
+      active: true,
+      subagent: { provider: FLASH.provider, model: FLASH.model, phase: 'next' },
+    })
+    expect(session.events.some(event => event.type.startsWith('discussion-intent/'))).toBe(false)
   })
 })

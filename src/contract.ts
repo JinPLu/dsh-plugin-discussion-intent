@@ -3,6 +3,7 @@
 export type DiscussionIntensity = 1 | 2 | 3
 export type FocusLevel = 'project' | 'direction' | 'mechanism' | 'experiment' | 'decision'
 export type HumanFrameKind = 'goal' | 'constraint' | 'criterion' | 'preference' | 'decision' | 'rejection' | 'non-goal'
+export type HumanFrameSourceOrigin = 'user' | 'ask_user_question'
 export type HumanFrameStatus = 'active' | 'superseded'
 export type DiscussionOptionStatus = 'open' | 'favored' | 'rejected'
 export type PendingFrameChangeTarget = 'title' | 'goal' | 'root-focus' | 'human-frame' | 'rejection'
@@ -20,6 +21,7 @@ export interface HumanFrame {
   readonly source: {
     readonly eventSeq: number
     readonly quote: string
+    readonly origin?: HumanFrameSourceOrigin
   }
   readonly status: HumanFrameStatus
 }
@@ -85,6 +87,7 @@ export interface DiscussionState {
   readonly goal: string
   readonly humanFrame: readonly HumanFrame[]
   readonly focus: DiscussionFocus
+  readonly rootFocus: DiscussionFocus
   readonly options: readonly DiscussionOption[]
   readonly synthesis: DiscussionSynthesis
   readonly pendingFrameChanges: readonly PendingFrameChange[]
@@ -98,6 +101,7 @@ export interface CaptureRequest {
   readonly quote: string
   readonly eventSeq?: number
   readonly normalizedRestatement?: string
+  readonly origin?: HumanFrameSourceOrigin
 }
 
 export interface ResolvedCapture extends Omit<CaptureRequest, 'eventSeq'> {
@@ -128,6 +132,56 @@ export interface RailRow {
   readonly label: 'Focus' | 'You' | 'Understanding' | 'Next' | 'Pending'
   readonly value: string
   readonly authority: 'human' | 'model'
+}
+
+/** Live Rail overlay: configured or running subagent model + effort. Not sidecar state. */
+export type SubagentRailPhase = 'running' | 'next'
+
+export interface SubagentRailStatus {
+  readonly provider?: string
+  readonly model: string
+  readonly effort: string
+  readonly phase: SubagentRailPhase
+}
+
+export const UNSET_SUBAGENT_MODEL = 'unset'
+export const DEFAULT_SUBAGENT_EFFORT = 'default'
+
+export function unsetSubagentRailStatus(): SubagentRailStatus {
+  return { model: UNSET_SUBAGENT_MODEL, effort: DEFAULT_SUBAGENT_EFFORT, phase: 'next' }
+}
+
+/** Compact model id for Rail chrome. `deepseek-v4-flash` → `v4-flash`. */
+export function shortSubagentModel(model: string): string {
+  const trimmed = model.trim()
+  if (trimmed === '' || trimmed === UNSET_SUBAGENT_MODEL) return trimmed
+  const base = trimmed.includes('/') ? trimmed.slice(trimmed.lastIndexOf('/') + 1) : trimmed
+  const stripped = base.replace(/^deepseek-/iu, '')
+  return stripped === '' ? base : stripped
+}
+
+/** Header-chip copy. Unset omits `default`; idle selected omits `next spawn`. */
+export function formatSubagentRailStatus(status: SubagentRailStatus): string {
+  if (status.model === UNSET_SUBAGENT_MODEL) return 'subagent unset'
+  const model = shortSubagentModel(status.model)
+  if (status.phase === 'running') return `running · ${model} · ${status.effort}`
+  return `${model} · ${status.effort}`
+}
+
+export function decodeSubagentRailStatus(value: unknown): SubagentRailStatus | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const record = value as Record<string, unknown>
+  const model = typeof record.model === 'string' ? record.model.trim() : ''
+  const effort = typeof record.effort === 'string' ? record.effort.trim() : ''
+  const phase = record.phase
+  if (model === '' || effort === '' || (phase !== 'running' && phase !== 'next')) return undefined
+  const provider = typeof record.provider === 'string' ? record.provider.trim() : ''
+  return {
+    model,
+    effort,
+    phase,
+    ...provider === '' ? {} : { provider },
+  }
 }
 
 const INTENSITY_NAMES: Record<DiscussionIntensity, string> = {
@@ -175,6 +229,10 @@ export function createDiscussionState(input: {
       currentQuestion: NO_TOPIC_YET,
       level: 'project',
     },
+    rootFocus: {
+      currentQuestion: NO_TOPIC_YET,
+      level: 'project',
+    },
     options: [],
     synthesis: EMPTY_SYNTHESIS,
     pendingFrameChanges: [],
@@ -186,7 +244,7 @@ export function createDiscussionState(input: {
   return state
 }
 
-/** Activate/resume and optionally change intensity. No event is needed when nothing changes. */
+/** Activate/resume and optionally change intensity. Same intensity stays the same object; the host still emits that snapshot. */
 export function activateDiscussion(
   current: DiscussionState | undefined,
   input: { readonly id: string; readonly intensity: DiscussionIntensity; readonly now: number },
@@ -226,7 +284,12 @@ export function deactivateDiscussion(current: DiscussionState, now: number): Dis
 }
 
 /** Apply one model-owned, source-aware incremental update. Protected fields become pending. */
-export function applyDiscussionUpdate(current: DiscussionState, update: DiscussionUpdate, now: number): DiscussionState {
+export function applyDiscussionUpdate(
+  current: DiscussionState,
+  update: DiscussionUpdate,
+  now: number,
+  openingUserSeq?: number,
+): DiscussionState {
   assertDiscussionState(current)
   if (!current.active) throw new Error('Discussion Mode is not active. Use /discussion first.')
   if (update.expectedRevision !== current.revision) {
@@ -244,7 +307,14 @@ export function applyDiscussionUpdate(current: DiscussionState, update: Discussi
     throw new Error('supersedeStatementIds requires a new same-session proving quote in the same call.')
   }
 
-  const installed = installHumanMainline(current, captured.added)
+  const installed = installHumanMainline(current, captured.added, openingUserSeq)
+  const proposedFocus = update.focus === undefined ? undefined : validateFocus(update.focus)
+  const dive = proposedFocus !== undefined && isImmediateWorkingDive({
+    focus: installed.focus,
+    rootFocus: installed.rootFocus,
+    pendingFrameChanges: current.pendingFrameChanges,
+  }, proposedFocus)
+  const workingFocus = dive && proposedFocus !== undefined ? proposedFocus : installed.focus
   const options = applyOptionUpdates(current.options, update.optionUpdates ?? [])
   const synthesis = update.synthesis === undefined
     ? current.synthesis
@@ -259,14 +329,18 @@ export function applyDiscussionUpdate(current: DiscussionState, update: Discussi
   const pendingAdditions = collectProtectedProposals({
     ...current,
     goal: installed.goal,
-    focus: installed.focus,
-  }, update, revision)
+    focus: workingFocus,
+    rootFocus: installed.rootFocus,
+  }, update, revision, { skipFocus: dive })
   const changed = (update.captures?.length ?? 0) > 0
     || supersedeIds.length > 0
     || (update.optionUpdates?.length ?? 0) > 0
     || update.synthesis !== undefined
     || update.historySummary !== undefined
     || pendingAdditions.length > 0
+    || installed.goal !== current.goal
+    || !sameFocus(workingFocus, current.focus)
+    || !sameFocus(installed.rootFocus, current.rootFocus)
   if (!changed) throw new Error('discussion_update must contain at least one material update.')
 
   const history = update.historySummary === undefined
@@ -276,7 +350,8 @@ export function applyDiscussionUpdate(current: DiscussionState, update: Discussi
     ...current,
     revision,
     goal: installed.goal,
-    focus: installed.focus,
+    focus: workingFocus,
+    rootFocus: installed.rootFocus,
     humanFrame: captured.frames,
     options,
     synthesis,
@@ -302,9 +377,18 @@ export function withCheckpoint(state: DiscussionState, checkpoint: DiscussionChe
 /** Decode one whole-state snapshot (the JSON sidecar body). Malformed input fails rather than silently degrading. */
 export function decodeDiscussionState(value: unknown): DiscussionState {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('Discussion state must be an object.')
-  const raw = value as DiscussionState & { readonly pendingFrameChanges?: unknown }
+  const raw = value as DiscussionState & {
+    readonly pendingFrameChanges?: unknown
+    readonly rootFocus?: unknown
+    readonly subagent?: unknown
+  }
+  const inheritedRoot = raw.rootFocus === undefined || raw.rootFocus === null
+    ? raw.focus
+    : raw.rootFocus
+  const { subagent: _overlay, ...rest } = raw
   const state = {
-    ...raw,
+    ...rest,
+    rootFocus: inheritedRoot,
     pendingFrameChanges: Array.isArray(raw.pendingFrameChanges) ? raw.pendingFrameChanges : [],
   }
   assertDiscussionState(state)
@@ -316,12 +400,12 @@ export function activePendingFrameChanges(state: DiscussionState): readonly Pend
 }
 
 export function discussionRailRows(state: DiscussionState): readonly RailRow[] {
-  const active = state.humanFrame.filter(frame => frame.status === 'active')
-  const locks = active.filter(frame => frame.kind === 'rejection' || frame.kind === 'decision')
-  const quotes = (locks.length > 0 ? locks : active).map(frame => frame.statement)
+  const quotes = state.humanFrame
+    .filter(frame => frame.status === 'active' && isYouLock(frame))
+    .map(frame => frame.statement)
   const pending = activePendingFrameChanges(state)
   const rows: RailRow[] = [
-    { label: 'Focus', value: state.focus.currentQuestion, authority: 'model' },
+    { label: 'Focus', value: railFocusValue(state), authority: 'model' },
     { label: 'You', value: quotes.length === 0 ? 'No direct statement captured yet.' : quotes.join(' · '), authority: 'human' },
     { label: 'Understanding', value: state.synthesis.interpretation, authority: 'model' },
     { label: 'Next', value: state.synthesis.nextStep || state.synthesis.openPoint, authority: 'model' },
@@ -341,10 +425,10 @@ export function discussionRailRows(state: DiscussionState): readonly RailRow[] {
 export function renderDiscussionPolicy(state: DiscussionState): string {
   assertDiscussionState(state)
   const intensity = state.intensity === 1
-    ? 'FAST: stay concise; identify the key fork and recommend a next move. Ask no question unless blocked by a user preference.'
+    ? 'FAST: stay concise; identify the key fork and recommend a next move. Avoid asking. Ask no question unless blocked by a user preference.'
     : state.intensity === 2
-      ? 'DEFAULT: compare the meaningful alternatives, keep evidence and user criteria visible, and ask at most one high-value preference question when needed.'
-      : 'DEEP: reason from first principles and stand on the strongest prior work. Before recommending a direction, identify the strongest prior approach, state the concrete difference, name a falsifiable test, and explain the field-level value. Expose tensions and novel openings, then converge instead of endlessly expanding.'
+      ? 'DEFAULT: compare the meaningful alternatives, keep evidence and user criteria visible, and ask at most one batch of independent same-stage preference questions when needed. Defer dependents.'
+      : 'DEEP: reason from first principles and stand on the strongest prior work. Before recommending a direction, identify the strongest prior approach, state the concrete difference, name a falsifiable test, and explain the field-level value. Expose tensions and novel openings, then converge instead of endlessly expanding. Batch every independent valuable question for the current stage together; defer dependents to the next stage.'
   const activeFrames = state.humanFrame.filter(frame => frame.status === 'active')
   const prioritized = [
     ...activeFrames.filter(frame => frame.kind === 'rejection' || frame.kind === 'decision'),
@@ -362,16 +446,26 @@ export function renderDiscussionPolicy(state: DiscussionState): string {
     'Discussion Mode is active.',
     intensity,
     'Do not invent or install a topic. Intensity is already set. The discussion stays untitled until the user states a question or accepts a pending topic.',
-    'Use the native ask_user_question tool only for preferences, boundaries, or direction choices. Research discoverable facts yourself. Ask one question at a time.',
+    'Every substantial turn: write visible prose first with Stage · settled · open forks. Map Stage to Focus / rootFocus / level, settled to Goal and active Human Frames, and open forks to openPoint plus current options.',
+    'Use the native ask_user_question tool only for preferences, boundaries, authorization, or direction choices. Facts that can be looked up must be looked up; only ask preference or authorization.',
+    'Explain before ask: before any preference question, write benefit / cost / assumption / consequence in visible prose. Put that evidence on optionUpdates evidenceFor and evidenceAgainst. Do not add new option schema fields.',
+    'When evidence is enough, recommend. Mark the first favored option title with (Recommended). historySummary names the closed stage and the opened stage.',
+    'End of turn: align recommendation / openPoint / nextStep. nextStep must be an authorized action.',
+    'Same-turn order: visible prose → discussion_update → then ask_user_question if needed. ask_user_question header must be human wording. options[].description must distinguish each option alone.',
+    'Pending first: if title, goal, or root-focus Pending Frame Changes exist, do not ask other preference questions first. Use each change\'s existing question and impact for one accept/reject batch. Results still go through /discussion accept or /discussion reject. ask_user_question answers must not auto-lock the root.',
+    'Subagent handoff: objective, scope, settled constraints, evidence, requested return. Missing or unavailable subagents must not block the main discussion. Call discussion_update before spawning a subagent and after each bounded return. rc.6 has no contributeRun — prompt only, no fake hard gate.',
+    'historySummary checkpoints: a material user decision, a stage settled, or an authorized next action. Do not invent a Writer or a second discussion-document system.',
     'Keep direct user quotes separate from model synthesis. Never present a normalized restatement as the user\'s words.',
-    'Before every substantive discussion reply, call discussion_update so the durable state and Markdown checkpoint stay current.',
-    'discussion_update may capture quoted user statements, add candidate options or evidence, and revise the provisional interpretation. It may propose a title, goal, or root-focus change; those become Pending Frame Changes. It cannot silently replace title, goal, root focus, Human Frames, or recorded rejections. A captured decision or goal quote installs Focus from that wording when Focus is still empty; a captured goal quote also fills an empty Goal. Recommendation, next step, and favored options must not contradict active rejection or non-goal frames.',
+    'Call discussion_update after visible prose, before every substantive discussion reply, before spawning a subagent, and after each bounded return so the durable state and Markdown checkpoint stay current.',
+    'Rail Focus is the working focus. The root question stays locked until /discussion accept or a later typed decision or question installs an empty root. Do not describe a Pending root-focus change as the current root question.',
+    'discussion_update may capture quoted user statements, add candidate options or evidence, and revise the provisional interpretation. It may propose a title, goal, or root-focus change; those become Pending Frame Changes. A focus write with returnTo that exactly names the locked root (or the current working focus when the root is empty), at a deeper mechanism/experiment/decision level, updates the working focus immediately. Other focus writes stay Pending. It cannot silently replace title, goal, root focus, Human Frames, or recorded rejections. The first user message may install working focus only; it does not fill Goal or lock the root. A later typed decision, or a later goal that contains ？ or ?, may lock an empty root and sync working focus. An ask_user_question choice is the user\'s words and is captured as a decision; it is not the root question and may set working focus only while the root is still empty. A captured goal quote fills an empty Goal only when it is not the opening user message. Recommendation, next step, and favored options must not contradict active rejection or non-goal frames.',
     'Active Human Frames are authoritative every turn, especially rejection and decision frames. New papers, tool results, and research evidence stay candidates. They cannot replace active Human Frames or the locked question.',
     'supersedeStatementIds requires a new same-session proving quote in the same call.',
     'Return to the current focus when exploration drifts. Preserve rejected directions and decisive evidence in options/history. Converge to a recommendation and next step when the evidence is sufficient.',
     `Revision: ${String(state.revision)}. Title: ${state.provisionalTitle}`,
     `Goal: ${state.goal}`,
     `Focus (${state.focus.level}): ${state.focus.currentQuestion}`,
+    `Root focus (${state.rootFocus.level}): ${state.rootFocus.currentQuestion}`,
     'Direct user frame:',
     human,
     'Pending Frame Changes:',
@@ -407,6 +501,19 @@ export function renderDiscussionMarkdown(state: DiscussionState): string {
       `- **${change.id} · ${change.status} · ${change.target}** — ${change.previous} → ${change.proposed}${change.status === 'pending' ? ` (/discussion accept ${change.id} | /discussion reject ${change.id})` : ''}`
     )).join('\n')
   const history = state.shortHistory.map(entry => `- r${String(entry.revision)} — ${entry.summary}`).join('\n')
+  const firstFavored = state.options.find(option => option.status === 'favored')
+  const recommendedOptions = state.options.length === 0
+    ? '- No options mapped yet.'
+    : state.options.map(option => {
+      const mark = firstFavored !== undefined && option.id === firstFavored.id ? ' (Recommended)' : ''
+      return `- ${option.id}: ${option.title}${mark} [${option.status}]`
+    }).join('\n')
+  const decisions = state.humanFrame.filter(frame => frame.status === 'active').length === 0
+    ? '- No direct user statements captured yet.'
+    : state.humanFrame
+      .filter(frame => frame.status === 'active')
+      .map(frame => `- **${frame.kind}** — “${frame.statement}”`)
+      .join('\n')
   return [
     `# ${state.provisionalTitle}`,
     '',
@@ -415,6 +522,20 @@ export function renderDiscussionMarkdown(state: DiscussionState): string {
     '## Goal', '', state.goal,
     '', '## Current Focus', '', `- Level: ${state.focus.level}`, `- Question: ${state.focus.currentQuestion}`,
     ...(state.focus.returnTo === undefined ? [] : [`- Return to: ${state.focus.returnTo}`]),
+    '', '## Root Focus', '', `- Level: ${state.rootFocus.level}`, `- Question: ${state.rootFocus.currentQuestion}`,
+    ...(state.rootFocus.returnTo === undefined ? [] : [`- Return to: ${state.rootFocus.returnTo}`]),
+    '', '## Current stage', '',
+    `- Goal: ${state.goal}`,
+    `- Focus (${state.focus.level}): ${state.focus.currentQuestion}`,
+    `- Root focus (${state.rootFocus.level}): ${state.rootFocus.currentQuestion}`,
+    ...(state.focus.returnTo === undefined ? [] : [`- Return to: ${state.focus.returnTo}`]),
+    '', '## Current question batch', '', state.synthesis.openPoint,
+    '', '## Options and recommendation', '',
+    `- Recommendation: ${state.synthesis.recommendation}`,
+    recommendedOptions,
+    '', '## Decisions and open points', '',
+    decisions,
+    `- Next authorized action: ${state.synthesis.nextStep}`,
     '', '## User Frame', '', human,
     '', '## Pending Frame Changes', '', pending,
     '', '## Options and Evidence', '', options,
@@ -450,10 +571,14 @@ export function assertDiscussionState(value: unknown): asserts value is Discussi
     requiredText(frame.source.quote, 'Human Frame source quote')
     if (frame.statement !== frame.source.quote) throw new Error('HumanFrame.statement must equal source.quote.')
     if (!Number.isSafeInteger(frame.source.eventSeq) || frame.source.eventSeq < 0) throw new Error('Human Frame eventSeq must be non-negative.')
+    if (frame.source.origin !== undefined && frame.source.origin !== 'user' && frame.source.origin !== 'ask_user_question') {
+      throw new Error(`Unknown Human Frame source origin ${String(frame.source.origin)}.`)
+    }
     if (!humanKinds.includes(frame.kind)) throw new Error(`Unknown Human Frame kind ${String(frame.kind)}.`)
     if (!humanStatuses.includes(frame.status)) throw new Error(`Unknown Human Frame status ${String(frame.status)}.`)
   }
   validateFocus(state.focus)
+  validateFocus(state.rootFocus)
   if (!Array.isArray(state.options)) throw new Error('Discussion options must be an array.')
   const optionIds = new Set<string>()
   const optionStatuses: readonly DiscussionOptionStatus[] = ['open', 'favored', 'rejected']
@@ -510,6 +635,7 @@ function collectProtectedProposals(
   current: DiscussionState,
   update: DiscussionUpdate,
   revision: number,
+  options?: { readonly skipFocus?: boolean },
 ): readonly PendingFrameChange[] {
   const additions: PendingFrameChange[] = []
   const push = (change: Omit<PendingFrameChange, 'id' | 'status' | 'createdAtRevision'>): void => {
@@ -544,15 +670,12 @@ function collectProtectedProposals(
       })
     }
   }
-  if (update.focus !== undefined) {
+  if (update.focus !== undefined && options?.skipFocus !== true) {
     const proposed = validateFocus(update.focus)
-    const same = proposed.currentQuestion === current.focus.currentQuestion
-      && proposed.level === current.focus.level
-      && proposed.returnTo === current.focus.returnTo
-    if (!same) {
+    if (!sameFocus(proposed, current.rootFocus)) {
       push({
         target: 'root-focus',
-        previous: current.focus.currentQuestion,
+        previous: current.rootFocus.currentQuestion,
         proposed: proposed.currentQuestion,
         impact: 'Would replace the root focus question.',
         question: `Accept the proposed root focus “${proposed.currentQuestion}”?`,
@@ -603,13 +726,15 @@ function applyAcceptedChange(current: DiscussionState, change: PendingFrameChang
   if (change.target === 'title') return { ...current, provisionalTitle: requiredText(change.proposed, 'provisional title') }
   if (change.target === 'goal') return { ...current, goal: requiredText(change.proposed, 'goal') }
   if (change.target === 'root-focus') {
+    const focus = validateFocus({
+      currentQuestion: change.proposed,
+      level: change.focusLevel ?? current.rootFocus.level,
+      ...(change.returnTo === undefined ? {} : { returnTo: change.returnTo }),
+    })
     return {
       ...current,
-      focus: validateFocus({
-        currentQuestion: change.proposed,
-        level: change.focusLevel ?? current.focus.level,
-        ...(change.returnTo === undefined ? {} : { returnTo: change.returnTo }),
-      }),
+      rootFocus: focus,
+      focus,
     }
   }
   return current
@@ -629,13 +754,18 @@ function applyCaptures(
   for (const capture of captures) {
     const quote = requiredText(capture.quote, 'capture quote')
     if (!Number.isSafeInteger(capture.eventSeq) || capture.eventSeq < 0) throw new Error('Capture eventSeq must be non-negative.')
-    if (next.some(frame => frame.source.eventSeq === capture.eventSeq && frame.statement === quote && frame.kind === capture.kind)) continue
+    if (next.some(frame => frame.statement === quote && frame.kind === capture.kind)) continue
+    const origin = capture.origin === 'ask_user_question' ? 'ask_user_question' : undefined
     const frame: HumanFrame = {
       id: `statement-${String(capture.eventSeq)}-${String(next.length + 1)}`,
       kind: capture.kind,
       statement: quote,
       ...(capture.normalizedRestatement === undefined ? {} : { normalizedRestatement: requiredText(capture.normalizedRestatement, 'normalized restatement') }),
-      source: { eventSeq: capture.eventSeq, quote },
+      source: {
+        eventSeq: capture.eventSeq,
+        quote,
+        ...(origin === undefined ? {} : { origin }),
+      },
       status: 'active',
     }
     next.push(frame)
@@ -645,24 +775,43 @@ function applyCaptures(
 }
 
 function installHumanMainline(
-  current: Pick<DiscussionState, 'goal' | 'focus'>,
+  current: Pick<DiscussionState, 'goal' | 'focus' | 'rootFocus'>,
   added: readonly HumanFrame[],
-): { readonly goal: string; readonly focus: DiscussionFocus } {
+  openingUserSeq?: number,
+): { readonly goal: string; readonly focus: DiscussionFocus; readonly rootFocus: DiscussionFocus } {
   let goal = current.goal
   let focus = current.focus
+  let rootFocus = current.rootFocus
+  let openingFocusInstalled = false
   for (const frame of added) {
-    if (frame.kind === 'goal' && goal === NO_TOPIC_YET) {
+    const askOrigin = frame.source.origin === 'ask_user_question'
+    const opening = !askOrigin && openingUserSeq !== undefined && frame.source.eventSeq === openingUserSeq
+    const process = isProcessOrRefreshQuote(frame.statement)
+    if (frame.kind === 'goal' && goal === NO_TOPIC_YET && !opening) {
       goal = frame.statement
     }
-    if ((frame.kind === 'decision' || frame.kind === 'goal') && focus.currentQuestion === NO_TOPIC_YET) {
-      focus = {
-        currentQuestion: frame.statement,
-        level: frame.kind === 'decision' ? 'decision' : focus.level,
-        ...(focus.returnTo === undefined ? {} : { returnTo: focus.returnTo }),
+    if (opening) {
+      if (!process && !openingFocusInstalled && focus.currentQuestion === NO_TOPIC_YET) {
+        focus = withQuestion(focus, frame.statement, focus.level)
+        openingFocusInstalled = true
       }
+      continue
+    }
+    if (askOrigin && frame.kind === 'decision' && !process) {
+      if (rootFocus.currentQuestion === NO_TOPIC_YET) {
+        focus = withQuestion(focus, frame.statement, focus.level)
+      }
+      continue
+    }
+    if (process) continue
+    if (rootFocus.currentQuestion !== NO_TOPIC_YET) continue
+    const questionGoal = frame.kind === 'goal' && looksLikeQuestion(frame.statement)
+    if (frame.kind === 'decision' || questionGoal) {
+      focus = withQuestion(focus, frame.statement, focus.level)
+      rootFocus = { currentQuestion: frame.statement, level: focus.level }
     }
   }
-  return { goal, focus }
+  return { goal, focus, rootFocus }
 }
 
 const ENGLISH_STOPWORDS = new Set([
@@ -776,6 +925,69 @@ function appendHistory(
   entry: DiscussionHistoryEntry,
 ): readonly DiscussionHistoryEntry[] {
   return [...current, entry].slice(-12)
+}
+
+const FOCUS_DEPTH: Record<FocusLevel, number> = {
+  project: 0,
+  direction: 1,
+  mechanism: 2,
+  experiment: 3,
+  decision: 4,
+}
+
+const DIVE_LEVELS: ReadonlySet<FocusLevel> = new Set(['mechanism', 'experiment', 'decision'])
+
+function sameFocus(left: DiscussionFocus, right: DiscussionFocus): boolean {
+  return left.currentQuestion === right.currentQuestion
+    && left.level === right.level
+    && left.returnTo === right.returnTo
+}
+
+function withQuestion(focus: DiscussionFocus, currentQuestion: string, level: FocusLevel): DiscussionFocus {
+  return {
+    currentQuestion,
+    level,
+    ...(focus.returnTo === undefined ? {} : { returnTo: focus.returnTo }),
+  }
+}
+
+function looksLikeQuestion(text: string): boolean {
+  return text.includes('？') || text.includes('?')
+}
+
+function isProcessOrRefreshQuote(text: string): boolean {
+  const trimmed = text.trim()
+  if (/^spawn\s+subagents\b/iu.test(trimmed)) return true
+  return /更新[\s\S]{0,40}?(焦点|讨论)/u.test(trimmed)
+}
+
+function isYouLock(frame: HumanFrame): boolean {
+  if (isProcessOrRefreshQuote(frame.statement)) return false
+  return frame.kind === 'decision'
+    || frame.kind === 'rejection'
+    || frame.kind === 'non-goal'
+    || frame.kind === 'criterion'
+}
+
+function railFocusValue(state: DiscussionState): string {
+  const working = state.focus.currentQuestion
+  const root = state.rootFocus.currentQuestion
+  if (root !== NO_TOPIC_YET && root !== working) return `${working} · ↑${root}`
+  return working
+}
+
+function isImmediateWorkingDive(
+  current: Pick<DiscussionState, 'focus' | 'rootFocus' | 'pendingFrameChanges'>,
+  proposed: DiscussionFocus,
+): boolean {
+  if (proposed.returnTo === undefined) return false
+  if (!DIVE_LEVELS.has(proposed.level)) return false
+  const anchor = current.rootFocus.currentQuestion === NO_TOPIC_YET ? current.focus : current.rootFocus
+  if (proposed.returnTo !== anchor.currentQuestion) return false
+  if (FOCUS_DEPTH[proposed.level] <= FOCUS_DEPTH[anchor.level]) return false
+  return !current.pendingFrameChanges.some(change => (
+    change.status === 'pending' && change.proposed === proposed.returnTo
+  ))
 }
 
 function validateFocus(focus: DiscussionFocus): DiscussionFocus {

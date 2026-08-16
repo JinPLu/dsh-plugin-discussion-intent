@@ -7,11 +7,15 @@ import {
   createDiscussionState,
   deactivateDiscussion,
   decodeDiscussionState,
+  decodeSubagentRailStatus,
   discussionRailRows,
+  formatSubagentRailStatus,
+  shortSubagentModel,
   NO_TOPIC_YET,
   rejectPendingFrameChange,
   renderDiscussionMarkdown,
   renderDiscussionPolicy,
+  unsetSubagentRailStatus,
   UNTITLED_TITLE,
 } from '../src/contract.ts'
 
@@ -26,6 +30,7 @@ describe('portable Discussion state', () => {
     expect(state.provisionalTitle).toBe(UNTITLED_TITLE)
     expect(state.goal).toBe(NO_TOPIC_YET)
     expect(state.focus.currentQuestion).toBe(NO_TOPIC_YET)
+    expect(state.rootFocus.currentQuestion).toBe(NO_TOPIC_YET)
     expect(state.pendingFrameChanges).toEqual([])
     expect(renderDiscussionPolicy(state)).not.toContain('Infer the provisional topic')
     expect(renderDiscussionPolicy(state)).toContain('Do not invent or install a topic')
@@ -42,6 +47,15 @@ describe('portable Discussion state', () => {
     expect(decoded.pendingFrameChanges).toEqual([])
     expect(decoded.version).toBe(1)
     expect(() => assertDiscussionState(raw)).toThrow('Pending Frame Changes must be an array.')
+  })
+
+  it('decodes version-1 sidecars that omit rootFocus by copying the locked working focus', () => {
+    const raw = JSON.parse(JSON.stringify(opened())) as Record<string, unknown>
+    raw.focus = { currentQuestion: 'Which missing experience should the World Model generate?', level: 'direction' }
+    delete raw.rootFocus
+    const decoded = decodeDiscussionState(raw)
+    expect(decoded.rootFocus).toEqual(decoded.focus)
+    expect(decoded.rootFocus.currentQuestion).toBe('Which missing experience should the World Model generate?')
   })
 
   it('keeps exact direct-user wording separate from model normalization', () => {
@@ -154,7 +168,8 @@ describe('portable Discussion state', () => {
     }, 10)
     expect(corrected.provisionalTitle).toBe(UNTITLED_TITLE)
     expect(corrected.goal).toBe('The result must have real domain value and innovation.')
-    expect(corrected.focus.currentQuestion).toBe('The result must have real domain value and innovation.')
+    expect(corrected.rootFocus.currentQuestion).toBe('The deliverables are a demo, a technical report, and a paper-ready experiment.')
+    expect(corrected.focus.currentQuestion).toBe('The deliverables are a demo, a technical report, and a paper-ready experiment.')
     expect(corrected.focus.level).toBe('project')
     expect(corrected.pendingFrameChanges.map(change => change.target)).toEqual(['title', 'goal', 'root-focus'])
     expect(discussionRailRows(corrected).some(row => row.label === 'Pending')).toBe(true)
@@ -187,7 +202,8 @@ describe('portable Discussion state', () => {
       },
       historySummary: 'Returned from wording work to the experiment plan and narrowed revisit/occlusion to stress tests.',
     }, 12)
-    expect(correctedAgain.focus.currentQuestion).toBe('The result must have real domain value and innovation.')
+    expect(correctedAgain.focus.currentQuestion).toBe('The deliverables are a demo, a technical report, and a paper-ready experiment.')
+    expect(correctedAgain.rootFocus.currentQuestion).toBe('The deliverables are a demo, a technical report, and a paper-ready experiment.')
     expect(correctedAgain.pendingFrameChanges.filter(change => change.status === 'pending' && change.target === 'root-focus')).toHaveLength(2)
     const resumed = activateDiscussion(deactivateDiscussion(correctedAgain, 13), {
       id: correctedAgain.id,
@@ -244,11 +260,185 @@ describe('portable Discussion state', () => {
 
   it('gives the three intensity levels materially different behavior', () => {
     expect(renderDiscussionPolicy(opened(1))).toContain('FAST: stay concise')
+    expect(renderDiscussionPolicy(opened(1))).toContain('Avoid asking')
     expect(renderDiscussionPolicy(opened(2))).toContain('DEFAULT: compare')
+    expect(renderDiscussionPolicy(opened(2))).toContain('at most one batch')
     expect(renderDiscussionPolicy(opened(3))).toContain('DEEP: reason from first principles')
     expect(renderDiscussionPolicy(opened(3))).toContain('strongest prior approach')
     expect(renderDiscussionPolicy(opened(3))).toContain('concrete difference')
     expect(renderDiscussionPolicy(opened(3))).toContain('falsifiable test')
     expect(renderDiscussionPolicy(opened(3))).toContain('field-level value')
+    expect(renderDiscussionPolicy(opened(3))).toContain('Batch every independent valuable question')
+  })
+
+  it('renders Collaborate sidecar sections from existing fields only', () => {
+    const markdown = renderDiscussionMarkdown(opened())
+    expect(markdown).toContain('## Current stage')
+    expect(markdown).toContain('## Current question batch')
+    expect(markdown).toContain('## Options and recommendation')
+    expect(markdown).toContain('## Decisions and open points')
+    expect(markdown).toContain(`- Focus (project): ${NO_TOPIC_YET}`)
+    expect(markdown).toContain(`- Root focus (project): ${NO_TOPIC_YET}`)
+    expect(markdown).toContain(NO_TOPIC_YET)
+    expect(markdown).toContain('Next authorized action:')
+    expect(markdown).not.toContain('assumption:')
+    expect(markdown).not.toContain('docs/teamwork/discussions/')
+  })
+
+  it('installs only working focus from the opening user message', () => {
+    const next = applyDiscussionUpdate(opened(), {
+      expectedRevision: 1,
+      captures: [{
+        kind: 'goal',
+        quote: '查看 Codex 线程并继续讨论论文主线。',
+        eventSeq: 9,
+      }],
+    }, 2, 9)
+    expect(next.goal).toBe(NO_TOPIC_YET)
+    expect(next.rootFocus.currentQuestion).toBe(NO_TOPIC_YET)
+    expect(next.focus.currentQuestion).toBe('查看 Codex 线程并继续讨论论文主线。')
+    expect(discussionRailRows(next)[0]).toMatchObject({ label: 'Focus', value: '查看 Codex 线程并继续讨论论文主线。' })
+  })
+
+  it('dives working focus immediately when returnTo names the locked root at a deeper level', () => {
+    const locked = applyDiscussionUpdate(opened(), {
+      expectedRevision: 1,
+      captures: [{
+        kind: 'decision',
+        quote: '先把论文主线收敛到可执行计划。',
+        eventSeq: 4,
+      }],
+    }, 2)
+    expect(locked.rootFocus.currentQuestion).toBe('先把论文主线收敛到可执行计划。')
+    const dived = applyDiscussionUpdate(locked, {
+      expectedRevision: 2,
+      focus: {
+        currentQuestion: 'VLM 能否重读自己输出的 ViT embedding 并在渲染前自修？',
+        level: 'mechanism',
+        returnTo: '先把论文主线收敛到可执行计划。',
+      },
+      historySummary: 'Sank working focus to the Bernini self-read question.',
+    }, 3)
+    expect(dived.focus.currentQuestion).toBe('VLM 能否重读自己输出的 ViT embedding 并在渲染前自修？')
+    expect(dived.rootFocus.currentQuestion).toBe('先把论文主线收敛到可执行计划。')
+    expect(dived.pendingFrameChanges.filter(change => change.target === 'root-focus')).toEqual([])
+    expect(discussionRailRows(dived)[0]?.value).toBe(
+      'VLM 能否重读自己输出的 ViT embedding 并在渲染前自修？ · ↑先把论文主线收敛到可执行计划。',
+    )
+  })
+
+  it('keeps a focus write without returnTo as a pending root change', () => {
+    const locked = applyDiscussionUpdate(opened(), {
+      expectedRevision: 1,
+      captures: [{
+        kind: 'decision',
+        quote: '先把论文主线收敛到可执行计划。',
+        eventSeq: 4,
+      }],
+    }, 2)
+    const proposed = applyDiscussionUpdate(locked, {
+      expectedRevision: 2,
+      focus: {
+        currentQuestion: 'How should occlusion become the root experiment?',
+        level: 'direction',
+      },
+    }, 3)
+    expect(proposed.focus.currentQuestion).toBe('先把论文主线收敛到可执行计划。')
+    expect(proposed.rootFocus.currentQuestion).toBe('先把论文主线收敛到可执行计划。')
+    expect(proposed.pendingFrameChanges).toMatchObject([{
+      status: 'pending',
+      target: 'root-focus',
+      proposed: 'How should occlusion become the root experiment?',
+    }])
+  })
+
+  it('captures an ask_user_question label as You without locking the root', () => {
+    const openedFocus = applyDiscussionUpdate(opened(), {
+      expectedRevision: 1,
+      captures: [{
+        kind: 'criterion',
+        quote: 'Action precision is a capability gate; OOD is the core evaluation axis.',
+        eventSeq: 3,
+      }],
+    }, 2, 3)
+    const answered = applyDiscussionUpdate(openedFocus, {
+      expectedRevision: 2,
+      captures: [{
+        kind: 'decision',
+        quote: '接受 D：给定 W，只学习显式电影决策 C 与连续执行计划 Z。',
+        eventSeq: 40,
+        origin: 'ask_user_question',
+      }],
+    }, 3, 3)
+    expect(answered.rootFocus.currentQuestion).toBe(NO_TOPIC_YET)
+    expect(answered.focus.currentQuestion).toBe('接受 D：给定 W，只学习显式电影决策 C 与连续执行计划 Z。')
+    const you = discussionRailRows(answered).find(row => row.label === 'You')?.value
+    expect(you).toContain('接受 D：给定 W，只学习显式电影决策 C 与连续执行计划 Z。')
+    expect(you).toContain('Action precision is a capability gate; OOD is the core evaluation axis.')
+  })
+
+  it('does not treat process or refresh quotes as You locks or focus moves', () => {
+    const started = applyDiscussionUpdate(opened(), {
+      expectedRevision: 1,
+      captures: [{
+        kind: 'decision',
+        quote: '先把论文主线收敛到可执行计划。',
+        eventSeq: 4,
+      }],
+    }, 2)
+    const refreshed = applyDiscussionUpdate(started, {
+      expectedRevision: 2,
+      captures: [
+        { kind: 'decision', quote: 'spawn subagents', eventSeq: 5 },
+        { kind: 'criterion', quote: '更新当前的讨论情况。包括焦点，我说过的点、当前理解、下一步等', eventSeq: 6 },
+      ],
+    }, 3)
+    expect(refreshed.focus.currentQuestion).toBe('先把论文主线收敛到可执行计划。')
+    expect(refreshed.rootFocus.currentQuestion).toBe('先把论文主线收敛到可执行计划。')
+    const you = discussionRailRows(refreshed).find(row => row.label === 'You')?.value
+    expect(you).toContain('先把论文主线收敛到可执行计划。')
+    expect(you).not.toContain('spawn subagents')
+    expect(you).not.toContain('更新当前的讨论情况')
+  })
+})
+
+describe('subagent Rail overlay', () => {
+  it('formats configured and running status without adding a Rail row', () => {
+    expect(formatSubagentRailStatus(unsetSubagentRailStatus())).toBe('subagent unset')
+    expect(formatSubagentRailStatus({
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-flash',
+      effort: 'high',
+      phase: 'next',
+    })).toBe('v4-flash · high')
+    expect(formatSubagentRailStatus({
+      model: 'deepseek-v4-pro',
+      effort: 'max',
+      phase: 'running',
+    })).toBe('running · v4-pro · max')
+    expect(shortSubagentModel('deepseek-v4-flash')).toBe('v4-flash')
+    expect(shortSubagentModel('openai/gpt-5.6-sol')).toBe('gpt-5.6-sol')
+    expect(discussionRailRows(opened())).toHaveLength(4)
+  })
+
+  it('decodes a valid overlay and ignores a malformed one', () => {
+    expect(decodeSubagentRailStatus({
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-flash',
+      effort: 'high',
+      phase: 'next',
+    })).toEqual({
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-flash',
+      effort: 'high',
+      phase: 'next',
+    })
+    expect(decodeSubagentRailStatus({ model: 'deepseek-v4-flash', phase: 'next' })).toBeUndefined()
+    const raw = {
+      ...JSON.parse(JSON.stringify(opened())) as Record<string, unknown>,
+      subagent: { model: 'deepseek-v4-flash', effort: 'high', phase: 'next' },
+    }
+    expect(decodeDiscussionState(raw)).toEqual(opened())
+    expect('subagent' in decodeDiscussionState(raw)).toBe(false)
   })
 })

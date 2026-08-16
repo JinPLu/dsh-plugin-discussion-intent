@@ -6,12 +6,19 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { apply, inject } from '../src/index.ts'
 import {
+  decodeCatalogPayload,
+  formatSubagentModelCommandResult,
   listAvailableModels,
+  materializeSpawnEffort,
   optionLabel,
   parseCustomRoute,
   readStoredRoute,
   routeFromAnswer,
   SUBAGENT_MODEL_QUESTION_ID,
+  SubagentModelSelection,
+  SubagentRailTracker,
+  subagentRailStatus,
+  UNSET_SUBAGENT_MODEL_HINT,
 } from '../src/subagent-model.ts'
 
 const FLASH = { provider: 'deepseek-official', model: 'deepseek-v4-flash' } as const
@@ -138,6 +145,12 @@ describe('subagent model selection helpers', () => {
       provider: 'openai-codex',
       model: 'gpt-5.6-sol',
     })
+    expect(formatSubagentModelCommandResult(models, undefined)).toContain('unset')
+    expect(formatSubagentModelCommandResult(models, FLASH)).toContain('deepseek-official/deepseek-v4-flash')
+    expect(decodeCatalogPayload({
+      models,
+      selected: FLASH,
+    })).toEqual({ models, selected: FLASH })
   })
 
   it('rejects a skipped ask answer', () => {
@@ -148,19 +161,12 @@ describe('subagent model selection helpers', () => {
 })
 
 describe('optional subagents model wrap', () => {
-  it('asks from the live catalog when the stored selection is empty', async () => {
-    const { subagents, starts, asks } = await harness()
-    await subagents.start('spawn', { prompt: 'child' })
-    expect(asks[0]?.questions[0]?.id).toBe(SUBAGENT_MODEL_QUESTION_ID)
-    expect(asks[0]?.questions[0]?.options?.map(option => option.label)).toEqual([
-      'DeepSeek-V4-Flash (deepseek-official/deepseek-v4-flash)',
-      'DeepSeek-V4-Pro (deepseek-official/deepseek-v4-pro)',
-      'GPT-5.6 Sol (openai-codex/gpt-5.6-sol)',
-    ])
-    expect(starts).toEqual([{
-      provider: 'spawn',
-      request: { prompt: 'child', agentOptions: FLASH },
-    }])
+  it('throws when unset and does not call userQuestions.ask', async () => {
+    const selection = new SubagentModelSelection()
+    await expect(selection.ensureChosen()).rejects.toThrow(UNSET_SUBAGENT_MODEL_HINT)
+    const { subagents, asks } = await harness()
+    await expect(subagents.start('spawn', { prompt: 'child' })).rejects.toThrow(UNSET_SUBAGENT_MODEL_HINT)
+    expect(asks).toEqual([])
   })
 
   it('reuses a stored selection and does not ask again', async () => {
@@ -192,8 +198,66 @@ describe('optional subagents model wrap', () => {
     })
   })
 
-  it('does not inherit a parent model when the user skips the question', async () => {
-    const { subagents } = await harness({ skipAsk: true })
-    await expect(subagents.start('spawn', { prompt: 'child' })).rejects.toThrow(/unset/)
+  it('does not inherit a parent model when the selection is still unset', async () => {
+    const { subagents, asks } = await harness({ skipAsk: true })
+    await expect(subagents.start('spawn', { prompt: 'child' })).rejects.toThrow(/header chip|\/discussion model/)
+    expect(asks).toEqual([])
+  })
+})
+
+describe('subagent Rail status', () => {
+  it('shows configured spawn values, then a running child when one is live', () => {
+    expect(subagentRailStatus({})).toEqual({ model: 'unset', effort: 'default', phase: 'next' })
+    expect(subagentRailStatus({ configured: FLASH })).toEqual({
+      provider: FLASH.provider,
+      model: FLASH.model,
+      effort: 'default',
+      phase: 'next',
+    })
+    const effortByRoute = new Map([['deepseek-official/deepseek-v4-flash', 'high']])
+    expect(subagentRailStatus({ configured: FLASH, effortByRoute })).toEqual({
+      provider: FLASH.provider,
+      model: FLASH.model,
+      effort: 'high',
+      phase: 'next',
+    })
+    expect(subagentRailStatus({
+      configured: FLASH,
+      effortByRoute,
+      running: { provider: 'deepseek-official', model: 'deepseek-v4-pro', effort: 'max' },
+    })).toEqual({
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-pro',
+      effort: 'max',
+      phase: 'running',
+    })
+  })
+
+  it('materializes adapter default effort and tracks running children', async () => {
+    expect(await materializeSpawnEffort(undefined, FLASH)).toBe('default')
+    expect(await materializeSpawnEffort({
+      listProviders: () => [],
+      listModels: async () => [],
+      resolveCallConfig: async () => ({ reasoningEffort: 'high' }),
+    }, FLASH)).toBe('high')
+    const selection = new SubagentModelSelection()
+    await selection.persist(FLASH)
+    const tracker = new SubagentRailTracker(selection)
+    expect(tracker.status('parent')).toEqual({
+      provider: FLASH.provider,
+      model: FLASH.model,
+      effort: 'default',
+      phase: 'next',
+    })
+    tracker.setEffort(FLASH, 'high')
+    tracker.markRunning('child-1', 'parent', { provider: FLASH.provider, model: FLASH.model })
+    expect(tracker.status('parent')).toEqual({
+      provider: FLASH.provider,
+      model: FLASH.model,
+      effort: 'high',
+      phase: 'running',
+    })
+    tracker.markEnded('child-1')
+    expect(tracker.status('parent').phase).toBe('next')
   })
 })

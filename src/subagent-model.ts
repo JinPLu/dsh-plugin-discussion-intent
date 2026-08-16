@@ -1,10 +1,18 @@
 /**
  * Discussion Mode subagent model selection. Duck-typed host seams only —
- * no DSH package imports. Empty until the user picks from the live catalog.
+ * no DSH package imports. Empty until the user picks from the header chip
+ * or `/discussion model`; spawn does not ask in-thread.
  */
+import {
+  DEFAULT_SUBAGENT_EFFORT,
+  UNSET_SUBAGENT_MODEL,
+  type SubagentRailStatus,
+} from './contract.ts'
 
 export const SUBAGENT_MODEL_QUESTION_ID = 'discussion-intent-subagent-model'
 export const SUBAGENT_MODEL_SETTINGS_NS = 'discussion-intent'
+export const UNSET_SUBAGENT_MODEL_HINT =
+  'Discussion Mode subagent model is unset. Pick one from the header chip or /discussion model.'
 
 export interface ChildRoute {
   readonly provider: string
@@ -32,6 +40,10 @@ export interface LlmLike {
     readonly name?: string
     readonly description?: string
   }[]>
+  resolveCallConfig?(config: {
+    readonly provider: string
+    readonly model: string
+  }): Promise<{ readonly reasoningEffort?: string }>
 }
 
 export interface UserQuestionsLike {
@@ -82,7 +94,49 @@ export function parseCustomRoute(custom: string): ChildRoute | undefined {
   const trimmed = custom.trim()
   const slash = trimmed.lastIndexOf('/')
   if (slash <= 0 || slash === trimmed.length - 1) return undefined
-  return { provider: trimmed.slice(0, slash).trim(), model: trimmed.slice(slash + 1).trim() }
+  const provider = trimmed.slice(0, slash).trim()
+  const model = trimmed.slice(slash + 1).trim()
+  if (provider === '' || model === '') return undefined
+  return { provider, model }
+}
+
+export function formatSubagentModelCommandResult(
+  models: readonly CatalogModel[],
+  selected: ChildRoute | undefined,
+): string {
+  const current = selected === undefined
+    ? 'unset. Pick one from the header chip or /discussion model <provider>/<id>.'
+    : `${selected.provider}/${selected.model}. Change with the header chip or /discussion model <provider>/<id>.`
+  const available = models.length === 0
+    ? ['(empty catalog)']
+    : models.map(model => `- ${optionLabel(model)}`)
+  return [`Discussion Mode subagent model: ${current}`, 'Available:', ...available].join('\n')
+}
+
+export function decodeCatalogPayload(value: unknown): {
+  readonly models: CatalogModel[]
+  readonly selected?: ChildRoute
+} | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const record = value as { readonly models?: unknown; readonly selected?: unknown }
+  if (!Array.isArray(record.models)) return undefined
+  const models: CatalogModel[] = []
+  for (const item of record.models) {
+    if (typeof item !== 'object' || item === null) continue
+    const model = item as Record<string, unknown>
+    const provider = typeof model.provider === 'string' ? model.provider.trim() : ''
+    const id = typeof model.id === 'string' ? model.id.trim() : ''
+    const name = typeof model.name === 'string' && model.name.trim() !== '' ? model.name : id
+    if (provider === '' || id === '') continue
+    models.push({
+      provider,
+      id,
+      name,
+      ...typeof model.description === 'string' && model.description !== '' ? { description: model.description } : {},
+    })
+  }
+  const selected = readStoredRoute(record.selected)
+  return selected === undefined ? { models } : { models, selected }
 }
 
 export function mergeChildAgentOptions(
@@ -155,7 +209,6 @@ export function routeFromAnswer(
 export class SubagentModelSelection {
   private memory: ChildRoute | undefined
   private scope: SettingsScopeLike | undefined
-  private asking: Promise<ChildRoute> | undefined
 
   attachSettings(settings: SettingsLike, schema: unknown): void {
     this.scope = settings.register(SUBAGENT_MODEL_SETTINGS_NS, schema, { base: {} })
@@ -171,53 +224,126 @@ export class SubagentModelSelection {
     await this.scope?.replace({ provider: route.provider, model: route.model })
   }
 
-  async ensureChosen(deps: {
-    readonly llm?: LlmLike | undefined
-    readonly userQuestions?: UserQuestionsLike | undefined
-  }): Promise<ChildRoute> {
+  async ensureChosen(): Promise<ChildRoute> {
     const stored = this.current()
     if (stored !== undefined) return stored
-    if (this.asking !== undefined) return this.asking
-    this.asking = this.ask(deps).finally(() => {
-      this.asking = undefined
-    })
-    return this.asking
+    throw new Error(UNSET_SUBAGENT_MODEL_HINT)
+  }
+}
+
+export function routeKey(route: { readonly provider: string; readonly model: string }): string {
+  return `${route.provider}/${route.model}`
+}
+
+export function subagentRailStatus(input: {
+  readonly configured?: ChildRoute
+  readonly effortByRoute?: ReadonlyMap<string, string>
+  readonly running?: { readonly provider: string; readonly model: string; readonly effort?: string }
+}): SubagentRailStatus {
+  const effortOf = (route: { readonly provider: string; readonly model: string }, fallback?: string): string => {
+    if (fallback !== undefined && fallback !== '') return fallback
+    return input.effortByRoute?.get(routeKey(route)) ?? DEFAULT_SUBAGENT_EFFORT
+  }
+  if (input.running !== undefined) {
+    return {
+      model: input.running.model,
+      effort: effortOf(input.running, input.running.effort),
+      phase: 'running',
+      ...input.running.provider === '' ? {} : { provider: input.running.provider },
+    }
+  }
+  if (input.configured !== undefined) {
+    return {
+      provider: input.configured.provider,
+      model: input.configured.model,
+      effort: effortOf(input.configured),
+      phase: 'next',
+    }
+  }
+  return { model: UNSET_SUBAGENT_MODEL, effort: DEFAULT_SUBAGENT_EFFORT, phase: 'next' }
+}
+
+export async function materializeSpawnEffort(
+  llm: LlmLike | undefined,
+  route: ChildRoute,
+): Promise<string> {
+  if (llm?.resolveCallConfig === undefined) return DEFAULT_SUBAGENT_EFFORT
+  try {
+    const resolved = await llm.resolveCallConfig({ provider: route.provider, model: route.model })
+    const effort = typeof resolved.reasoningEffort === 'string' ? resolved.reasoningEffort.trim() : ''
+    return effort === '' ? DEFAULT_SUBAGENT_EFFORT : effort
+  } catch {
+    return DEFAULT_SUBAGENT_EFFORT
+  }
+}
+
+/** In-memory overlay for the Rail: configured spawn plus any live child. */
+export class SubagentRailTracker {
+  private readonly effortByRoute = new Map<string, string>()
+  private readonly running = new Map<string, {
+    readonly parentSessionId: string
+    readonly provider: string
+    readonly model: string
+    readonly effort?: string
+  }>()
+  private readonly listeners = new Set<() => void>()
+
+  constructor(private readonly selection: SubagentModelSelection) {}
+
+  onChange(listener: () => void): () => void {
+    this.listeners.add(listener)
+    return () => { this.listeners.delete(listener) }
   }
 
-  private async ask(deps: {
-    readonly llm?: LlmLike | undefined
-    readonly userQuestions?: UserQuestionsLike | undefined
-  }): Promise<ChildRoute> {
-    if (deps.llm === undefined) {
-      throw new Error('Discussion Mode subagent model is unset and no LLM catalog is available')
-    }
-    if (deps.userQuestions === undefined) {
-      throw new Error('Discussion Mode subagent model is unset; ask_user_question requires a user-questions provider')
-    }
-    const models = await listAvailableModels(deps.llm)
-    if (models.length === 0) {
-      throw new Error('Discussion Mode subagent model is unset and the current catalog is empty')
-    }
-    const byLabel = new Map<string, ChildRoute>()
-    const options = models.map(model => {
-      const label = optionLabel(model)
-      byLabel.set(label, { provider: model.provider, model: model.id })
-      return {
-        label,
-        ...model.description === undefined ? {} : { description: model.description },
-      }
+  status(parentSessionId: string): SubagentRailStatus {
+    const running = this.runningFor(parentSessionId)
+    const configured = this.selection.current()
+    return subagentRailStatus({
+      effortByRoute: this.effortByRoute,
+      ...configured === undefined ? {} : { configured },
+      ...running === undefined ? {} : { running },
     })
-    const answer = await deps.userQuestions.ask({
-      questions: [{
-        id: SUBAGENT_MODEL_QUESTION_ID,
-        header: 'Subagent model',
-        question: 'Which model should Discussion Mode subagents use?',
-        detail: 'Shown list is the catalog available right now. The parent thread model is unchanged. This choice is remembered until you change it.',
-        options,
-      }],
+  }
+
+  setEffort(route: ChildRoute, effort: string): void {
+    const next = effort.trim() === '' ? DEFAULT_SUBAGENT_EFFORT : effort.trim()
+    if (this.effortByRoute.get(routeKey(route)) === next) return
+    this.effortByRoute.set(routeKey(route), next)
+    this.notify()
+  }
+
+  markRunning(
+    childId: string,
+    parentSessionId: string,
+    route: { readonly provider: string; readonly model: string; readonly effort?: string },
+  ): void {
+    this.running.set(childId, {
+      parentSessionId,
+      provider: route.provider,
+      model: route.model,
+      ...route.effort === undefined || route.effort === '' ? {} : { effort: route.effort },
     })
-    const route = routeFromAnswer(answer, byLabel)
-    await this.persist(route)
-    return route
+    this.notify()
+  }
+
+  markEnded(childId: string): void {
+    if (!this.running.delete(childId)) return
+    this.notify()
+  }
+
+  notify(): void {
+    for (const listener of this.listeners) listener()
+  }
+
+  private runningFor(parentSessionId: string): {
+    readonly provider: string
+    readonly model: string
+    readonly effort?: string
+  } | undefined {
+    let latest: { readonly provider: string; readonly model: string; readonly effort?: string } | undefined
+    for (const entry of this.running.values()) {
+      if (entry.parentSessionId === parentSessionId) latest = entry
+    }
+    return latest
   }
 }

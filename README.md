@@ -16,16 +16,16 @@
 
 <p align="center"><sub>概念导图：图中文字对应实际产品能力，不代表 DSH 界面截图。</sub></p>
 
-Discussion Mode 让你守住目标、边界和评价标准；模型负责拆解、比较和收敛。`/discussion` 只设深度，不装主题。下一句才开始讨论。你明确说过的话和模型理解分开呈现；改题必须 `/discussion accept`。适合研究方向、产品策略、技术路线和跨方案取舍。
+Discussion Mode 让你守住目标、边界和评价标准；模型负责拆解、比较和收敛。`/discussion` 只设深度，不装主题。下一句才开始讨论。你明确说过的话和模型理解分开呈现；改根问题必须 `/discussion accept`，工作焦点可以随讨论下沉；问卷选择算你说过的话。适合研究方向、产品策略、技术路线和跨方案取舍。
 
 <a id="core"></a>
 
 ## ✨ 核心卖点
 
-- **意图不漂移**：目标、边界、评价标准和否定项持续注入。不能静默改题。新证据先当候选。建议和下一步不得与仍有效的否定矛盾。
-- **子代理模型自选**：第一次 `spawn` / `fork` 若还未选模型，会用当前可用列表提问；选完记住。父线程模型不变。
+- **意图不漂移**：目标、边界、评价标准和否定项持续注入。根问题须你接受才改；工作焦点可下沉。问卷选择算你说过的话。新证据先当候选。建议和下一步不得与仍有效的否定矛盾。
+- **子代理模型自选**：点顶栏芯片或 `/discussion model` 从当前 catalog 选择并记住。未选就 spawn 会失败。父线程模型不变。
 - **从模糊到可执行**：不必先填主题。`/discussion 1|2|3` 只设深度。改题须你接受。
-- **四行 Rail 随时纠偏**：`当前焦点 / 你明确说过 / 当前理解 / 下一步`。Pending 时多一行，直接 accept/reject。
+- **四行 Rail 随时纠偏**：`当前焦点 / 你明确说过 / 当前理解 / 下一步`。顶栏显示讨论强度和当前子代理 model · effort。Pending 时多一行，直接 accept/reject。
 - **讨论可续**：检查点写入工作区，重启可恢复。保存失败会提示。
 
 ## 🧭 为什么不是普通聊天或长记忆
@@ -34,8 +34,8 @@ Discussion Mode 让你守住目标、边界和评价标准；模型负责拆解�
 | --- | --- |
 | 模型可能按最近的信息重述问题 | 用户明确的目标、边界、否定项与评价标准持续作为讨论依据 |
 | 模型总结容易看起来像用户已作出的决定 | 明确分开呈现“你已明确”与“当前理解” |
-| 新论文、局部机制或子问题可能直接成为叙事中心 | 新信息先作为候选；升格为根问题必须 `/discussion accept` |
-| 深入局部后容易忘记原本要解决什么 | 保持当前焦点、问题层级与需要返回的上位问题 |
+| 新论文、局部机制或子问题可能直接成为叙事中心 | 新信息先作为候选；升格为根问题必须 `/discussion accept`；工作焦点可带 `returnTo` 下沉 |
+| 深入局部后容易忘记原本要解决什么 | Rail 显示工作焦点；根问题已锁定且不同时，同一行写出 `工作焦点 · ↑根问题` |
 | 讨论结束时可能只有观点，没有决策路径 | 收敛为建议、风险、待验证点与下一步行动 |
 
 它是**单场复杂讨论**的控制层，不是长记忆，也不是一次性问答。Discussion Mode 是插件内部服务（`1=fast | 2=default | 3=deep`），不是 DSH 全局模式。不改 DSH 主仓，不写自定义会话事件。
@@ -51,6 +51,8 @@ dsh plugin --profile web add @jinplu/dsh-plugin-discussion-intent
 ```text
 /discussion              start or resume, default intensity, no topic
 /discussion 1|2|3        set depth only
+/discussion model        list catalog and current subagent model
+/discussion model <p>/<id>  persist subagent model for the next spawn
 /discussion accept <id>  accept a pending topic/frame change
 /discussion reject <id>  reject it
 /discussion off          pause; state kept
@@ -62,12 +64,13 @@ dsh plugin --profile web add @jinplu/dsh-plugin-discussion-intent
 
 ## 🗺️ 讨论状态与四行 Rail
 
-- 标题 / 目标 / 根焦点：你接受后才生效；decision/goal 原话可安装空 Focus
-- You：全部仍有效的否定与决定（原话与模型重述分开）
-- 当前焦点、层级、返回点，以及 Pending Frame Changes
+- 标题 / 目标 / 根问题：你接受后才生效。首句只装工作焦点；之后打字的 decision，或带 `？/?` 的 goal，才可锁定空的根问题
+- 工作焦点可随合格的 `returnTo` 下沉；改根问题仍须 `/discussion accept`
+- You：仍有效的决定、否定、非目标和评价标准；过程句（`spawn subagents`）和刷新句不算
+- 问卷选择由宿主写入 decision，算你说过的话，但不自动变成根问题
 - 候选方案、证据、当前理解、建议、下一步
 
-Web 输入框上方是只读 Rail（`Focus / You / Understanding / Next`）。Pending 时五行。`/discussion off` 后消失。
+Web 输入框上方是只读 Rail（`Focus / You / Understanding / Next`）。值列默认两行，点一行展开全文。顶栏芯片显示强度和子代理 `model · effort`（进行中会加 `running`；未选不写 default）；点芯片选下次 spawn 的模型。Pending 时五行。`/discussion off` 后消失。
 
 <a id="continuity"></a>
 
@@ -91,7 +94,7 @@ Web 输入框上方是只读 Rail（`Focus / You / Understanding / Next`）。Pe
   → 只设深度，未命名检查点，不推断主题
   → 用户下一句开始讨论
   → 每次实质回复前更新讨论状态（先写 Markdown，再写 JSON）
-  → 标题/目标/根焦点改写变成 Pending Frame Changes
+  → 标题/目标/根问题改写变成 Pending Frame Changes；合格的工作焦点下沉立即生效
   → /discussion accept <id> 或 /discussion reject <id>
   → 系统提示策略重注 Human Frame + Web Rail
   → 完全退出 DSH 后从侧车恢复

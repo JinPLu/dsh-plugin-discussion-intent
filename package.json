@@ -1,6 +1,6 @@
 {
   "name": "@jinplu/dsh-plugin-discussion-intent",
-  "version": "1.3.0",
+  "version": "1.6.0",
   "description": "An intent-calibrated DSH discussion mode that prevents complex conversations from drifting and turns them into evidence-based next steps.",
   "keywords": ["dsh", "dsh-plugin", "deepseek-harness", "discussion", "intent", "anti-drift", "decision-making", "agent"],
   "license": "MIT",
