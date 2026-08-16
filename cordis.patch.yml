@@ -1,6 +1,5 @@
-# Host-plane defense-in-depth (not a DSH source change): mount Discussion Mode
-# and pin tool-subagent / tool-subagent-fork. Web remounts live tools inside
-# agent presets; the live pin is the public subagents wrap in the adapter.
+# Public bundle-patch overlay (not a DSH source change): mount Discussion Mode.
+# Subagent model starts empty; the adapter wrap asks from the live catalog.
 - insert:
     - id: discussion-intent
       name: '@jinplu/dsh-plugin-discussion-intent'
@@ -8,21 +7,3 @@
         enabled: true
         defaultIntensity: 2
         directory: .dsh/discussions
-
-- id: tool-subagent
-  config:
-    provider: spawn
-    toolName: subagent
-    backgroundMode: continuable
-    agentOptions:
-      provider: deepseek-official
-      model: deepseek-v4-flash
-
-- id: tool-subagent-fork
-  config:
-    provider: fork
-    toolName: subagent_fork
-    backgroundMode: one-shot
-    agentOptions:
-      provider: deepseek-official
-      model: deepseek-v4-flash

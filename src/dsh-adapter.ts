@@ -1,10 +1,10 @@
 /**
  * DSH host adapter: the single named boundary where this plugin imports DSH
  * host packages and wires host services (slash command, model tool,
- * system-prompt section, Web Rail transport, optional subagents wrap,
+ * system-prompt section, Web Rail transport, optional subagent-model wrap,
  * session read). The public package entry (`index.ts`) is a thin facade over
  * this module. Domain logic stays DSH-independent in `contract.ts`,
- * `sidecar.ts`, and `capabilities.ts`.
+ * `sidecar.ts`, `subagent-model.ts`, and `capabilities.ts`.
  */
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -42,6 +42,14 @@ import {
   readDiscussionSidecarSync,
   writeDiscussionSidecar,
 } from './sidecar.ts'
+import {
+  mergeChildAgentOptions,
+  SubagentModelSelection,
+  type ChildAgentOptionsLike,
+  type LlmLike,
+  type SettingsLike,
+  type UserQuestionsLike,
+} from './subagent-model.ts'
 
 export const name = 'discussion-intent'
 export const inject = ['commands', 'sessions', 'systemPrompt', 'tools']
@@ -373,17 +381,6 @@ function railSnapshot(state: DiscussionState | undefined): RailSnapshot {
   return state ?? { active: false }
 }
 
-const DEFAULT_CHILD_AGENT_OPTIONS = {
-  provider: 'deepseek-official',
-  model: 'deepseek-v4-flash',
-} as const
-
-interface ChildAgentOptionsLike {
-  readonly provider?: string
-  readonly model?: string
-  readonly maxTokens?: number
-}
-
 interface SubagentStartRequestLike {
   readonly agentOptions?: ChildAgentOptionsLike
 }
@@ -397,29 +394,36 @@ interface SubagentsLike {
   startContinuable: (spec: ContinuableStartSpecLike) => unknown
 }
 
-function withDefaultChildAgentOptions<T extends SubagentStartRequestLike>(request: T): T {
-  return {
-    ...request,
-    agentOptions: {
-      ...DEFAULT_CHILD_AGENT_OPTIONS,
-      ...request.agentOptions,
-    },
-  }
-}
+const SUBAGENT_MODEL_SETTINGS_SCHEMA = z.object({
+  provider: z.string(),
+  model: z.string(),
+})
 
 /**
- * Live pin for web and other profiles that remount subagent tools inside
- * agent presets. Host-plane `cordis.patch.yml` rows stay as defense-in-depth.
+ * Live pin for spawn/fork. Selection starts empty; the first start asks
+ * the user to pick from the current LLM catalog.
  */
-function wrapSubagents(ctx: Context): () => void {
+function wrapSubagents(ctx: Context, selection: SubagentModelSelection): () => void {
   const subagents = ctx.get('subagents') as SubagentsLike | undefined
   if (subagents === undefined) return () => undefined
   const start = subagents.start.bind(subagents)
   const startContinuable = subagents.startContinuable.bind(subagents)
-  subagents.start = (provider, request) => start(provider, withDefaultChildAgentOptions(request))
-  subagents.startContinuable = spec => startContinuable({
+
+  const pin = async <T extends SubagentStartRequestLike>(request: T): Promise<T> => {
+    const route = await selection.ensureChosen({
+      llm: ctx.get('llm') as LlmLike | undefined,
+      userQuestions: ctx.get('userQuestions') as UserQuestionsLike | undefined,
+    })
+    return {
+      ...request,
+      agentOptions: mergeChildAgentOptions(request, route),
+    }
+  }
+
+  subagents.start = async (provider, request) => start(provider, await pin(request))
+  subagents.startContinuable = async spec => startContinuable({
     ...spec,
-    request: withDefaultChildAgentOptions(spec.request),
+    request: await pin(spec.request),
   })
   return () => {
     subagents.start = start
@@ -564,6 +568,11 @@ export function apply(ctx: Context, rawConfig: Config): void {
 
   registerTool(ctx, controller)
 
+  const selection = new SubagentModelSelection()
+  ctx.inject(['settings'], settingsCtx => {
+    selection.attachSettings(settingsCtx.get('settings') as SettingsLike, SUBAGENT_MODEL_SETTINGS_SCHEMA)
+  })
+
   ctx.inject(['webServer'], railCtx => {
     railCtx.effect(
       () => registerRailTransport(railCtx, controller),
@@ -573,8 +582,8 @@ export function apply(ctx: Context, rawConfig: Config): void {
 
   ctx.inject(['subagents'], subagentCtx => {
     subagentCtx.effect(
-      () => wrapSubagents(subagentCtx),
-      'discussion-intent:subagent-flash',
+      () => wrapSubagents(subagentCtx, selection),
+      'discussion-intent:subagent-model',
     )
   })
 }

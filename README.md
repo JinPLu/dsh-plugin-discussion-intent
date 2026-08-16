@@ -23,7 +23,7 @@ Discussion Mode 让你守住目标、边界和评价标准；模型负责拆解�
 ## ✨ 核心卖点
 
 - **意图不漂移**：目标、边界、评价标准和否定项持续注入。不能静默改题。新证据先当候选。建议和下一步不得与仍有效的否定矛盾。
-- **子代理默认 Flash**：公开 `subagents` wrap 把该 profile 的子代理默认设为 `deepseek-official` / `deepseek-v4-flash`。全 profile 生效，不只在 `/discussion` 开着时。不是 DSH 源码改动。
+- **子代理模型自选**：第一次 `spawn` / `fork` 若还未选模型，会用当前可用列表提问；选完记住。父线程模型不变。
 - **从模糊到可执行**：不必先填主题。`/discussion 1|2|3` 只设深度。改题须你接受。
 - **四行 Rail 随时纠偏**：`当前焦点 / 你明确说过 / 当前理解 / 下一步`。Pending 时多一行，直接 accept/reject。
 - **讨论可续**：检查点写入工作区，重启可恢复。保存失败会提示。
@@ -100,7 +100,7 @@ Web 输入框上方是只读 Rail（`Focus / You / Understanding / Next`）。Pe
 
 依赖已发布的 DSH `0.1.0-rc.6` 公共接口。无 `webServer` 时功能完整，只是没有 Rail。
 
-子代理默认 Flash 走公开 `subagents.start` / `startContinuable` wrap，全 profile 生效。`cordis.patch.yml` 只覆盖 host-plane 行。
+子代理模型一开始为空。第一次 spawn 时从当前 catalog 提问；跳过不会继承父线程模型。
 
 官方 rc.6 没有 `contributeRun`。研究证据保持为候选，升格须 Pending Frame Change。
 

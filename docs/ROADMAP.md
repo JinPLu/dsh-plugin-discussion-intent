@@ -19,13 +19,13 @@
 - [x] 空闲时四行只读 Web Rail；You 露出全部 active 否定与决定；有 Pending 时单独露出，不显示假主题
 - [x] 每次实质更新先写 Markdown 再写 JSON 侧车（`.dsh/discussions/*.md` / `.json`），`pendingFrameChanges` 落在 version `1`，旧文件缺省为 `[]`
 - [x] 保存失败可见，不静默丢失讨论检查点
-- [x] 公开 `subagents` wrap：该 profile 内所有子代理默认 `deepseek-official` / `deepseek-v4-flash`（bundle overlay 仅覆盖 host-plane）
+- [x] 子代理模型自选：空值时用当前 catalog 提问，不继承父线程
 
 ## 第二阶段：对已发布 rc.6 的真实消费验收
 
 - [x] 从生成的真实 tarball 安装到全新临时 DSH profile
 - [x] `dump-config` 能看到插件及默认强度
-- [x] `dump-config` 能看到两行 subagent 的 `agentOptions` 为 `deepseek-official` / `deepseek-v4-flash`
+- [x] `dump-config` 不再给 tool-subagent 行写死 agentOptions
 - [x] DSH 实际 boot 成功，不依赖开发仓库中未打包的文件
 - [x] `/discussion` 命令、`discussion_update` 工具 schema、policy 段 live smoke 全部通过
 - [x] Markdown 与 JSON 侧车在临时工作区真实生成且内容正确
@@ -44,7 +44,8 @@
 - [x] `v1.0.0` 的 npm provenance、Git tag、GitHub Release 和包版本一致
 - [x] `v1.1.0` 的 npm provenance、Git tag、GitHub Release 和包版本一致
 - [x] `v1.1.1` 的 npm provenance、Git tag、GitHub Release 和包版本一致
-- [ ] `v1.2.0` 的 npm provenance、Git tag、GitHub Release 和包版本一致
+- [x] `v1.2.0` 的 npm provenance、Git tag、GitHub Release 和包版本一致
+- [ ] `v1.3.0` 的 npm provenance、Git tag、GitHub Release 和包版本一致
 - [ ] 真实用户 profile 再执行一次安装、启动、开始讨论、切档、落盘和退出验收
 
 ## 后续增强原则

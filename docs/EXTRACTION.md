@@ -10,9 +10,9 @@
 - Host / Client 调用集中在命名 adapter；领域契约与侧车不直接依赖 DSH。
 - 唯一落盘路径：`src/sidecar.ts`。目录相对 session workspace。
 
-## 子代理默认 Flash
+## 子代理模型
 
-公开 `ctx.subagents.start` / `startContinuable` wrap 把该 profile 的子代理默认设为 `deepseek-official` / `deepseek-v4-flash`，与 `/discussion` 是否开启无关。显式 `request.agentOptions` 字段优先。`cordis.patch.yml` 只覆盖 host-plane 行（web 上那些行是 disabled）。
+选择一开始为空，存在 `discussion-intent` settings 段。第一次 `ctx.subagents.start` / `startContinuable` 若仍为空，用当前 `listProviders` + `listModels` 提问。跳过或取消会失败，不继承父线程。之后记住选择；显式 `request.agentOptions` 优先。
 
 ## 最小运行闭环
 
@@ -32,6 +32,7 @@
 - `tools`：`discussion_update`，带 `expectedRevision`；原话必须绑定同会话用户消息。
 - `invariants`：启动与 `session/created` 时校验侧车；损坏则明确报错。
 - `webServer`（可选）：`/dsh/discussion-intent/state` 与 `/events`。无 `webServer` 时其余功能完整，只是没有 Rail。
+- `subagents` + `llm` + `userQuestions` + `settings`（可选）：子代理模型为空时用当前 catalog 提问并记住。
 - `subagents`（可选）：wrap 公开 `start` / `startContinuable`，默认 Flash。无此服务时其余功能完整。
 
 ## 状态与持久化
