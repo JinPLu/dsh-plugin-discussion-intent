@@ -45,7 +45,7 @@
 - [x] `v1.1.0` 的 npm provenance、Git tag、GitHub Release 和包版本一致
 - [x] `v1.1.1` 的 npm provenance、Git tag、GitHub Release 和包版本一致
 - [x] `v1.2.0` 的 npm provenance、Git tag、GitHub Release 和包版本一致
-- [ ] `v1.3.0` 的 npm provenance、Git tag、GitHub Release 和包版本一致
+- [x] `v1.3.0` 的 npm provenance、Git tag、GitHub Release 和包版本一致
 - [ ] 真实用户 profile 再执行一次安装、启动、开始讨论、切档、落盘和退出验收
 
 ## 后续增强原则
