@@ -13,8 +13,11 @@ import {
   classifyLivePayload,
   decodeLiveState,
   discussionIntentStatePath,
+  compactRailText,
   DiscussionRail,
   formatLocalizedSubagentRailStatus,
+  HIDE_GOAL_BAR_CSS,
+  railHeaderNarrative,
   railValueStyle,
   toggleExpandedRailRow,
   visibleLiveState,
@@ -22,9 +25,11 @@ import {
 } from '../src/client/index.tsx'
 
 const t = (key: string) => ({
-  headerTitle: 'Discussion',
+  headerTitle: 'In discussion',
+  noFocus: 'No working focus yet',
   saved: 'saved',
   unsaved: 'not saved',
+  Pending: 'Pending',
   subagentLabel: 'subagent',
   subagentRunning: 'running',
   subagentUnset: 'unset',
@@ -83,29 +88,74 @@ describe('Discussion Rail', () => {
     expect(DiscussionRail({ state: { active: false } as DiscussionState, t })).toBeNull()
   })
 
-  it('renders exactly four read-only rows with intensity and save status', () => {
+  it('stays collapsed to the header by default and opens the four rows on demand', () => {
     const state = createDiscussionState({ id: 'rail-render', intensity: 3, now: 1 })
-    const element = DiscussionRail({ state, t })!
-    expect(element.type).toBe('div')
-    const aside = element.props.children as ReactElement
-    expect(aside.props['aria-label']).toBe('title')
-    const header = (aside.props.children as ReactElement[])[0] as ReactElement
-    expect(header.type).toBe('div')
-    expect(renderRowCount(element)).toBe(4)
-    const firstRow = railSections(element)[0]!
+    const collapsed = DiscussionRail({ state, t })!
+    expect(collapsed.type).toBe('div')
+    expect(collapsed.props['data-discussion-rail-open']).toBe('false')
+    expect(renderRowCount(collapsed)).toBe(0)
+    expect(headerText(collapsed, 'data-discussion-header-title')).toBe('In discussion')
+    expect(headerText(collapsed, 'data-discussion-header-focus')).toBe('No working focus yet')
+    expect(headerText(collapsed, 'data-discussion-intensity')).toBe('deep')
+    expect(headerText(collapsed, 'data-discussion-subagent')).toBeUndefined()
+    expect(findByData(collapsed, 'data-discussion-hide-goal')?.props.children).toBe(HIDE_GOAL_BAR_CSS)
+    expect(findByData(collapsed, 'data-discussion-checkpoint')?.props['aria-label']).toBe('not saved')
+    expect(findByData(collapsed, 'data-discussion-checkpoint')?.props['data-discussion-checkpoint-status']).toBe('unsaved')
+    expect(railHeaderNarrative(state, 'No working focus yet')).toEqual({
+      full: 'No working focus yet',
+      display: 'No working focus yet',
+      empty: true,
+    })
+
+    const toggles: number[] = []
+    const clickable = DiscussionRail({
+      state,
+      t,
+      onToggleOpen: () => { toggles.push(1) },
+    })!
+    findByData(clickable, 'data-discussion-intent-header')!.props.onClick()
+    expect(toggles).toEqual([1])
+
+    const opened = DiscussionRail({ state, t, open: true })!
+    expect(opened.props['data-discussion-rail-open']).toBe('true')
+    expect(renderRowCount(opened)).toBe(4)
+    const firstRow = railSections(opened)[0]!
     expect(firstRow.props['aria-label']).toBe('Focus')
-    const values = railSections(element).map(rowValue)
+    const values = railSections(opened).map(rowValue)
     expect(values[0]).toBe('No topic yet.')
     expect(values).not.toContain('Topic to be distilled')
+  })
+
+  it('uses the working focus as the header sentence, not Discussion · 3=deep', () => {
+    const locked = applyDiscussionUpdate(createDiscussionState({ id: 'rail-header', intensity: 3, now: 1 }), {
+      expectedRevision: 1,
+      captures: [{ kind: 'decision', quote: '先把论文主线收敛到可执行计划。', eventSeq: 4 }],
+    }, 2)
+    const dived = applyDiscussionUpdate(locked, {
+      expectedRevision: 2,
+      focus: {
+        currentQuestion: 'VLM 能否重读自己输出的 ViT embedding？',
+        level: 'mechanism',
+        returnTo: '先把论文主线收敛到可执行计划。',
+      },
+    }, 3)
+    const element = DiscussionRail({ state: dived, t })!
+    expect(renderRowCount(element)).toBe(0)
+    expect(headerText(element, 'data-discussion-header-title')).toBe('In discussion')
+    expect(headerText(element, 'data-discussion-header-focus')).toBe(
+      'VLM 能否重读自己输出的 ViT embedding？ · ↑先把论文主线收敛到可执行计划。',
+    )
     expect(headerText(element, 'data-discussion-intensity')).toBe('deep')
-    expect(headerText(element, 'data-discussion-subagent')).toBeUndefined()
-    expect(headerText(element, 'data-discussion-checkpoint')).toBe('not saved')
+    expect(String(headerText(element, 'data-discussion-header-focus'))).not.toContain('3=deep')
+    const long = `${'焦点'.repeat(80)}还要更长`
+    expect(compactRailText(long).length).toBeLessThanOrEqual(120)
+    expect(compactRailText(long).endsWith('…')).toBe(true)
   })
 
   it('shows configured subagent model and effort in the header, not under Next', () => {
     const state = createDiscussionState({ id: 'rail-subagent', intensity: 2, now: 1 })
     const subagent = { provider: 'deepseek-official', model: 'deepseek-v4-flash', effort: 'high', phase: 'next' as const }
-    const element = DiscussionRail({ state, subagent, t })!
+    const element = DiscussionRail({ state, subagent, t, open: true })!
     expect(renderRowCount(element)).toBe(4)
     expect(headerText(element, 'data-discussion-intensity')).toBe('default')
     expect(headerText(element, 'data-discussion-subagent')).toBe('v4-flash · high')
@@ -122,6 +172,7 @@ describe('Discussion Rail', () => {
       state,
       subagent: { model: 'deepseek-v4-pro', effort: 'max', phase: 'running' },
       t,
+      open: true,
     })!
     expect(renderRowCount(element)).toBe(4)
     expect(headerText(element, 'data-discussion-subagent')).toBe('running · v4-pro · max')
@@ -142,7 +193,7 @@ describe('Discussion Rail', () => {
         returnTo: '先把论文主线收敛到可执行计划。',
       },
     }, 3)
-    const element = DiscussionRail({ state: dived, t })!
+    const element = DiscussionRail({ state: dived, t, open: true })!
     const focus = railSections(element).find(row => row.props['aria-label'] === 'Focus')!
     expect(rowValue(focus)).toBe('VLM 能否重读自己输出的 ViT embedding？ · ↑先把论文主线收敛到可执行计划。')
     const valueNode = (focus.props.children as ReactElement[])[1]
@@ -158,8 +209,10 @@ describe('Discussion Rail', () => {
       state: proposed,
       subagent: unsetSubagentRailStatus(),
       t,
+      open: true,
     })!
     expect(renderRowCount(element)).toBe(5)
+    expect(headerText(element, 'data-discussion-pending-count')).toBe('Pending 1')
     const pending = railSections(element).find(row => row.props['aria-label'] === 'Pending')
     expect(pending).toBeDefined()
     expect(rowValue(pending!)).toContain('/discussion accept')
@@ -171,7 +224,7 @@ describe('Discussion Rail', () => {
 
   it('clamps values to two lines by default and expands only the clicked row', () => {
     const state = createDiscussionState({ id: 'rail-clamp', intensity: 2, now: 1 })
-    const collapsed = DiscussionRail({ state, t })!
+    const collapsed = DiscussionRail({ state, t, open: true })!
     const focus = findRow(collapsed, 'Focus')
     const you = findRow(collapsed, 'You')
     expect(focus.props['data-expanded']).toBe('false')
@@ -182,13 +235,13 @@ describe('Discussion Rail', () => {
     expect(toggleExpandedRailRow('Focus', 'Focus')).toBeUndefined()
     expect(toggleExpandedRailRow('Focus', 'You')).toBe('You')
 
-    const expandedFocus = DiscussionRail({ state, t, expandedLabel: 'Focus' })!
+    const expandedFocus = DiscussionRail({ state, t, open: true, expandedLabel: 'Focus' })!
     expect(findRow(expandedFocus, 'Focus').props['data-expanded']).toBe('true')
     expect(rowValueStyle(findRow(expandedFocus, 'Focus')).WebkitLineClamp).toBe('unset')
     expect(findRow(expandedFocus, 'You').props['data-expanded']).toBe('false')
     expect(rowValueStyle(findRow(expandedFocus, 'You')).WebkitLineClamp).toBe(2)
 
-    const expandedYou = DiscussionRail({ state, t, expandedLabel: 'You' })!
+    const expandedYou = DiscussionRail({ state, t, open: true, expandedLabel: 'You' })!
     expect(findRow(expandedYou, 'Focus').props['data-expanded']).toBe('false')
     expect(findRow(expandedYou, 'You').props['data-expanded']).toBe('true')
     expect(rowValueStyle(findRow(expandedYou, 'You')).WebkitLineClamp).toBe('unset')
@@ -204,6 +257,7 @@ describe('Discussion Rail', () => {
     const element = DiscussionRail({
       state: proposed,
       t,
+      open: true,
       expandedLabel: 'Pending',
       onToggleRow: label => { clicks.push(label) },
     })!
@@ -237,6 +291,23 @@ describe('Discussion Rail', () => {
     expect(unsetChip.props.onClick).toBeTypeOf('function')
     const picker = findByData(unset, 'data-discussion-subagent-picker')
     expect(picker).toBeDefined()
+    expect((picker!.props.style as { position?: string }).position).toBe('absolute')
+    const opens: number[] = []
+    const chipOnly = DiscussionRail({
+      state,
+      subagent: unsetSubagentRailStatus(),
+      t,
+      onToggleOpen: () => { opens.push(1) },
+      onTogglePicker: () => undefined,
+    })!
+    findByData(chipOnly, 'data-discussion-subagent')!.props.onClick({ stopPropagation() { /* chip */ } })
+    expect(opens).toEqual([])
+    expect(chipOnly.props['data-discussion-rail-open']).toBe('false')
+    expect(formatLocalizedSubagentRailStatus({
+      model: 'gpt-5.6-luna',
+      effort: 'default',
+      phase: 'next',
+    }, t)).toBe('gpt-5.6-luna')
     const options = (picker!.props.children as ReactElement[])
     expect(options).toHaveLength(2)
     expect(options[0]?.props['data-discussion-subagent-option']).toBe('deepseek-official/deepseek-v4-flash')

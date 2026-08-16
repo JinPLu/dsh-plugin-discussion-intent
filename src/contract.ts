@@ -160,12 +160,17 @@ export function shortSubagentModel(model: string): string {
   return stripped === '' ? base : stripped
 }
 
-/** Header-chip copy. Unset omits `default`; idle selected omits `next spawn`. */
+function effortSuffix(effort: string): string {
+  return effort === '' || effort === DEFAULT_SUBAGENT_EFFORT ? '' : ` · ${effort}`
+}
+
+/** Header-chip copy. Unset omits `default`; idle selected omits `next spawn` and default effort. */
 export function formatSubagentRailStatus(status: SubagentRailStatus): string {
   if (status.model === UNSET_SUBAGENT_MODEL) return 'subagent unset'
   const model = shortSubagentModel(status.model)
-  if (status.phase === 'running') return `running · ${model} · ${status.effort}`
-  return `${model} · ${status.effort}`
+  const effort = effortSuffix(status.effort)
+  if (status.phase === 'running') return `running · ${model}${effort}`
+  return `${model}${effort}`
 }
 
 export function decodeSubagentRailStatus(value: unknown): SubagentRailStatus | undefined {
@@ -453,7 +458,7 @@ export function renderDiscussionPolicy(state: DiscussionState): string {
     'End of turn: align recommendation / openPoint / nextStep. nextStep must be an authorized action.',
     'Same-turn order: visible prose → discussion_update → then ask_user_question if needed. ask_user_question header must be human wording. options[].description must distinguish each option alone.',
     'Pending first: if title, goal, or root-focus Pending Frame Changes exist, do not ask other preference questions first. Use each change\'s existing question and impact for one accept/reject batch. Results still go through /discussion accept or /discussion reject. ask_user_question answers must not auto-lock the root.',
-    'Subagent handoff: objective, scope, settled constraints, evidence, requested return. Missing or unavailable subagents must not block the main discussion. Call discussion_update before spawning a subagent and after each bounded return. rc.6 has no contributeRun — prompt only, no fake hard gate.',
+    'Subagent handoff: objective, scope, settled constraints, evidence, requested return. Do not capture or display spawn subagents as a user decision or the topic. Spawning is an authorized next action after discussion_update; pick the child model from the header chip or /discussion model, not from the thread. Missing or unavailable subagents must not block the main discussion. Call discussion_update before spawning a subagent and after each bounded return. rc.6 has no contributeRun — prompt only, no fake hard gate.',
     'historySummary checkpoints: a material user decision, a stage settled, or an authorized next action. Do not invent a Writer or a second discussion-document system.',
     'Keep direct user quotes separate from model synthesis. Never present a normalized restatement as the user\'s words.',
     'Call discussion_update after visible prose, before every substantive discussion reply, before spawning a subagent, and after each bounded return so the durable state and Markdown checkpoint stay current.',
@@ -957,7 +962,8 @@ function looksLikeQuestion(text: string): boolean {
 
 function isProcessOrRefreshQuote(text: string): boolean {
   const trimmed = text.trim()
-  if (/^spawn\s+subagents\b/iu.test(trimmed)) return true
+  if (/^spawn\s+sub-?agents?\b/iu.test(trimmed)) return true
+  if (/拉起?子代理|启动子代理|spawn\s+sub-?agents?/iu.test(trimmed)) return true
   return /更新[\s\S]{0,40}?(焦点|讨论)/u.test(trimmed)
 }
 

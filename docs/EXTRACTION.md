@@ -22,7 +22,7 @@
 | Discussion policy | 按档位约束讨论方法 | 不推断主题；守住否定与决定 |
 | `discussion_update` | 实质回复前更新状态 | 理解可写；建议 / 下一步 / favored 不得与有效否定矛盾；合格 `returnTo` 下沉工作焦点，改根问题仍 Pending |
 | 侧车文件 | 权威 JSON + 可读 Markdown | `.dsh/discussions/<session-id>.json` / `.md` |
-| Web Rail | `webServer` 上的 HTTP 快照 + SSE | 空闲四行，Pending 时五行；值列默认两行，点一行展开；顶栏芯片列出 catalog 并 POST 选模 |
+| Web Rail | `webServer` 上的 HTTP 快照 + SSE | 默认一条顶栏（讨论中 + 焦点 120 字）；点开四行，Pending 时五行；值列两行可再展开；芯片选模 |
 
 ## 使用的 DSH 公共接口（rc.6）
 

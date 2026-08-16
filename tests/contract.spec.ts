@@ -390,6 +390,7 @@ describe('portable Discussion state', () => {
       expectedRevision: 2,
       captures: [
         { kind: 'decision', quote: 'spawn subagents', eventSeq: 5 },
+        { kind: 'decision', quote: '拉起子代理', eventSeq: 7 },
         { kind: 'criterion', quote: '更新当前的讨论情况。包括焦点，我说过的点、当前理解、下一步等', eventSeq: 6 },
       ],
     }, 3)
@@ -398,6 +399,7 @@ describe('portable Discussion state', () => {
     const you = discussionRailRows(refreshed).find(row => row.label === 'You')?.value
     expect(you).toContain('先把论文主线收敛到可执行计划。')
     expect(you).not.toContain('spawn subagents')
+    expect(you).not.toContain('拉起子代理')
     expect(you).not.toContain('更新当前的讨论情况')
   })
 })
@@ -416,6 +418,11 @@ describe('subagent Rail overlay', () => {
       effort: 'max',
       phase: 'running',
     })).toBe('running · v4-pro · max')
+    expect(formatSubagentRailStatus({
+      model: 'gpt-5.6-luna',
+      effort: 'default',
+      phase: 'next',
+    })).toBe('gpt-5.6-luna')
     expect(shortSubagentModel('deepseek-v4-flash')).toBe('v4-flash')
     expect(shortSubagentModel('openai/gpt-5.6-sol')).toBe('gpt-5.6-sol')
     expect(discussionRailRows(opened())).toHaveLength(4)

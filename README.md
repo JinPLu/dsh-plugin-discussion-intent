@@ -25,7 +25,7 @@ Discussion Mode 让你守住目标、边界和评价标准；模型负责拆解�
 - **意图不漂移**：目标、边界、评价标准和否定项持续注入。根问题须你接受才改；工作焦点可下沉。问卷选择算你说过的话。新证据先当候选。建议和下一步不得与仍有效的否定矛盾。
 - **子代理模型自选**：点顶栏芯片或 `/discussion model` 从当前 catalog 选择并记住。未选就 spawn 会失败。父线程模型不变。
 - **从模糊到可执行**：不必先填主题。`/discussion 1|2|3` 只设深度。改题须你接受。
-- **四行 Rail 随时纠偏**：`当前焦点 / 你明确说过 / 当前理解 / 下一步`。顶栏显示讨论强度和当前子代理 model · effort。Pending 时多一行，直接 accept/reject。
+- **四行 Rail 随时纠偏**：默认一条顶栏（`讨论中` + 当前焦点）。点开才显示四行。讨论进行中隐藏官方 Goal 条。落盘用图标。点模型芯片只出浮层，不展开 Rail。
 - **讨论可续**：检查点写入工作区，重启可恢复。保存失败会提示。
 
 ## 🧭 为什么不是普通聊天或长记忆
@@ -70,7 +70,7 @@ dsh plugin --profile web add @jinplu/dsh-plugin-discussion-intent
 - 问卷选择由宿主写入 decision，算你说过的话，但不自动变成根问题
 - 候选方案、证据、当前理解、建议、下一步
 
-Web 输入框上方是只读 Rail（`Focus / You / Understanding / Next`）。值列默认两行，点一行展开全文。顶栏芯片显示强度和子代理 `model · effort`（进行中会加 `running`；未选不写 default）；点芯片选下次 spawn 的模型。Pending 时五行。`/discussion off` 后消失。
+Web 输入框上方是只读 Rail。默认折叠成一条顶栏：`讨论中` + 当前焦点（120 字）+ 强度 / 子代理 / 落盘。点顶栏展开四行；值列默认两行，点一行展开全文。点模型芯片选下次 spawn。Pending 时五行。`/discussion off` 后消失。
 
 <a id="continuity"></a>
 

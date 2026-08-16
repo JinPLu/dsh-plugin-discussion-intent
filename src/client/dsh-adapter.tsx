@@ -10,10 +10,13 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import {
+  activePendingFrameChanges,
   decodeDiscussionState,
   decodeSubagentRailStatus,
+  DEFAULT_SUBAGENT_EFFORT,
   discussionRailRows,
   intensityName,
+  NO_TOPIC_YET,
   shortSubagentModel,
   UNSET_SUBAGENT_MODEL,
   type DiscussionState,
@@ -31,7 +34,8 @@ export const inject = ['slots', 'locale']
 
 const zh = {
   title: 'Discussion Mode',
-  headerTitle: 'Discussion',
+  headerTitle: '讨论中',
+  noFocus: '还没有工作焦点',
   saved: '已落盘',
   unsaved: '未落盘',
   Focus: '当前焦点',
@@ -48,7 +52,8 @@ type DiscussionLocaleKey = keyof typeof zh
 
 const en: Record<DiscussionLocaleKey, string> = {
   title: 'Discussion Mode',
-  headerTitle: 'Discussion',
+  headerTitle: 'In discussion',
+  noFocus: 'No working focus yet',
   saved: 'saved',
   unsaved: 'not saved',
   Focus: 'Focus',
@@ -75,6 +80,7 @@ const styles = {
   },
   rail: {
     boxSizing: 'border-box',
+    position: 'relative',
     width: '100%',
     maxWidth: 'calc(var(--dsh-composer-card-max-width) - 4 * var(--dsh-composer-dock-inset))',
     margin: '0 auto',
@@ -83,21 +89,52 @@ const styles = {
     borderRadius: 12,
     background: 'var(--dsw-specific-tip)',
   },
+  railCollapsed: {
+    padding: '4px 12px',
+  },
   header: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
+    minHeight: 28,
+    fontSize: 12,
+    color: 'var(--dsw-alias-label-tertiary)',
+    cursor: 'pointer',
+  },
+  headerOpen: {
     marginBottom: 8,
     paddingBottom: 7,
     borderBottom: '1px solid var(--dsw-alias-border-l1)',
-    fontSize: 12,
-    color: 'var(--dsw-alias-label-tertiary)',
+  },
+  headerTitle: {
+    flex: 'none',
+    fontSize: 13,
+    fontWeight: 600,
+    lineHeight: '20px',
+    color: 'var(--dsw-alias-label-primary)',
+  },
+  headerFocus: {
+    minWidth: 0,
+    flex: 1,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    fontSize: 13,
+    lineHeight: '20px',
+    color: 'var(--dsw-alias-label-primary)',
   },
   headerCluster: {
     display: 'flex',
     alignItems: 'center',
     minWidth: 0,
+    flex: 1,
+    gap: 6,
+  },
+  headerMeta: {
+    display: 'flex',
+    alignItems: 'center',
+    flex: 'none',
     gap: 6,
   },
   chip: {
@@ -149,13 +186,31 @@ const styles = {
   modelValue: {
     color: 'var(--dsw-alias-label-primary-dimmed)',
   },
+  iconBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 28,
+    height: 28,
+    padding: 0,
+    border: 'none',
+    borderRadius: 999,
+    background: 'transparent',
+    color: 'var(--dsw-alias-label-tertiary)',
+    cursor: 'default',
+  },
   picker: {
-    margin: '0 0 8px',
+    position: 'absolute',
+    top: 'calc(100% + 4px)',
+    right: 12,
+    zIndex: 2,
+    width: 280,
     maxHeight: 180,
     overflowY: 'auto',
     border: '1px solid var(--dsw-alias-border-l1)',
     borderRadius: 8,
     background: 'var(--dsw-specific-tip)',
+    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.12)',
   },
   pickerItem: {
     display: 'block',
@@ -172,6 +227,27 @@ const styles = {
   },
 } as const
 
+export const RAIL_HEADER_FOCUS_LIMIT = 120
+
+/** Official AnchorRail compactText: 120 graphemes, then an ellipsis. */
+export function compactRailText(value: string, limit = RAIL_HEADER_FOCUS_LIMIT): string {
+  const characters = Array.from(value.trim())
+  return characters.length <= limit ? characters.join('') : `${characters.slice(0, limit - 1).join('')}…`
+}
+
+export function railHeaderNarrative(
+  state: DiscussionState,
+  emptyLabel: string,
+): { readonly full: string; readonly display: string; readonly empty: boolean } {
+  const full = discussionRailRows(state).find(row => row.label === 'Focus')?.value ?? ''
+  const empty = full === '' || full === NO_TOPIC_YET
+  return {
+    full: empty ? emptyLabel : full,
+    display: empty ? emptyLabel : compactRailText(full),
+    empty,
+  }
+}
+
 export function toggleExpandedRailRow(
   current: string | undefined,
   label: string,
@@ -184,19 +260,48 @@ export function railValueStyle(expanded: boolean, authority: 'human' | 'model'):
   return expanded ? { ...base, ...styles.valueExpanded } : base
 }
 
+export const HIDE_GOAL_BAR_CSS = '[data-goal-bar]{display:none!important}'
+
 export function formatLocalizedSubagentRailStatus(
   status: SubagentRailStatus,
   t: (key: DiscussionLocaleKey) => string,
 ): string {
   if (status.model === UNSET_SUBAGENT_MODEL) return `${t('subagentLabel')} ${t('subagentUnset')}`
   const model = shortSubagentModel(status.model)
-  if (status.phase === 'running') return `${t('subagentRunning')} · ${model} · ${status.effort}`
-  return `${model} · ${status.effort}`
+  const effort = status.effort === '' || status.effort === DEFAULT_SUBAGENT_EFFORT ? '' : ` · ${status.effort}`
+  if (status.phase === 'running') return `${t('subagentRunning')} · ${model}${effort}`
+  return `${model}${effort}`
+}
+
+function CheckpointGlyph({ status }: { readonly status: 'saved' | 'unsaved' | 'error' }) {
+  if (status === 'saved') {
+    return (
+      <svg width={14} height={14} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="M3 8.5 6.5 12 13 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    )
+  }
+  if (status === 'error') {
+    return (
+      <svg width={14} height={14} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <circle cx="8" cy="8" r="5.5" stroke="currentColor" strokeWidth="1.4" />
+        <path d="M8 5v4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+        <circle cx="8" cy="11.2" r="0.7" fill="currentColor" />
+      </svg>
+    )
+  }
+  return (
+    <svg width={14} height={14} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <circle cx="8" cy="8" r="5.5" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  )
 }
 
 export interface DiscussionRailProps extends PropsLocale<'discussionIntent'> {
   readonly state: DiscussionState | null | undefined
   readonly subagent?: SubagentRailStatus
+  readonly open?: boolean
+  readonly onToggleOpen?: () => void
   readonly expandedLabel?: string
   readonly onToggleRow?: (label: string) => void
   readonly pickerOpen?: boolean
@@ -205,14 +310,16 @@ export interface DiscussionRailProps extends PropsLocale<'discussionIntent'> {
   readonly onPickSubagent?: (route: ChildRoute) => void
 }
 
-/** Four read-only rows when idle; an extra Pending row when a frame change awaits accept/reject.
- *  Focus cell text is composed by the contract (`工作焦点 · ↑根问题` when the locked root differs).
- *  Subagent model/effort lives in the header chrome, not under Next.
- *  Rows clamp to two lines; click expands that row only. The chip opens the catalog picker. */
+/** Collapsed to a GoalBar-like header by default. Click the title/focus to open
+ *  the four read-only rows (Pending is a fifth). Focus cell text is composed by
+ *  the contract. Subagent model/effort is a header chip. Open rows clamp to two
+ *  lines; click expands that row only. The model chip opens the catalog picker. */
 export function DiscussionRail({
   state,
   subagent,
   t,
+  open = false,
+  onToggleOpen,
   expandedLabel,
   onToggleRow,
   pickerOpen = false,
@@ -224,33 +331,59 @@ export function DiscussionRail({
   const saved = state.checkpoint.status === 'saved'
   const spawn = subagent === undefined ? undefined : formatLocalizedSubagentRailStatus(subagent, t)
   const canPick = subagent !== undefined && subagent.phase !== 'running' && onTogglePicker !== undefined
+  const pendingCount = activePendingFrameChanges(state).length
+  const narrative = railHeaderNarrative(state, t('noFocus'))
+  const stop = (event: MouseEvent) => { event.stopPropagation() }
+  const checkpointStatus = state.checkpoint.status === 'error' ? 'error' : saved ? 'saved' : 'unsaved'
   return (
-    <div style={styles.dock} data-discussion-intent-rail>
-      <aside style={styles.rail} aria-label={t('title')}>
-        <div style={styles.header} data-discussion-intent-header>
+    <div style={styles.dock} data-discussion-intent-rail data-discussion-rail-open={open ? 'true' : 'false'}>
+      <aside style={open ? styles.rail : { ...styles.rail, ...styles.railCollapsed }} aria-label={t('title')}>
+        <style data-discussion-hide-goal>{HIDE_GOAL_BAR_CSS}</style>
+        <div
+          style={open ? { ...styles.header, ...styles.headerOpen } : styles.header}
+          data-discussion-intent-header
+          {...onToggleOpen === undefined ? {} : { onClick: onToggleOpen }}
+        >
           <div style={styles.headerCluster}>
-            <span>{t('headerTitle')}</span>
+            <span style={styles.headerTitle} data-discussion-header-title>{t('headerTitle')}</span>
+            <span style={styles.headerFocus} data-discussion-header-focus title={narrative.full}>
+              {narrative.display}
+            </span>
+          </div>
+          <div style={styles.headerMeta} onClick={stop}>
             <span style={styles.chip} data-discussion-intensity>
               {intensityName(state.intensity)}
             </span>
-          </div>
-          <div style={styles.headerCluster}>
             {subagent === undefined || spawn === undefined ? undefined : (
               <span
                 style={canPick ? { ...styles.chip, cursor: 'pointer' } : styles.chip}
                 data-discussion-subagent
                 data-discussion-subagent-phase={subagent.phase}
                 title={spawn}
-                {...canPick ? { role: 'button', onClick: onTogglePicker } : {}}
+                {...canPick ? {
+                  role: 'button',
+                  onClick: (event: MouseEvent) => {
+                    event.stopPropagation()
+                    onTogglePicker()
+                  },
+                } : {}}
               >
                 {spawn}
               </span>
             )}
+            {pendingCount === 0 ? undefined : (
+              <span style={styles.chip} data-discussion-pending-count>
+                {`${t('Pending')} ${String(pendingCount)}`}
+              </span>
+            )}
             <span
+              style={styles.iconBtn}
               data-discussion-checkpoint
-              title={state.checkpoint.status === 'error' ? state.checkpoint.message : undefined}
+              data-discussion-checkpoint-status={checkpointStatus}
+              aria-label={t(saved ? 'saved' : 'unsaved')}
+              title={state.checkpoint.status === 'error' ? state.checkpoint.message : t(saved ? 'saved' : 'unsaved')}
             >
-              {t(saved ? 'saved' : 'unsaved')}
+              <CheckpointGlyph status={checkpointStatus} />
             </span>
           </div>
         </div>
@@ -275,7 +408,7 @@ export function DiscussionRail({
             })}
           </div>
         ) : undefined}
-        {discussionRailRows(state).map(row => {
+        {open ? discussionRailRows(state).map(row => {
           const expanded = expandedLabel === row.label
           return (
             <section
@@ -296,7 +429,7 @@ export function DiscussionRail({
               </span>
             </section>
           )
-        })}
+        }) : undefined}
       </aside>
     </div>
   )
@@ -322,6 +455,7 @@ export async function postSubagentRoute(route: ChildRoute): Promise<boolean> {
 }
 
 function InteractiveDiscussionRail({ state, subagent, t }: DiscussionRailProps) {
+  const [open, setOpen] = useState(false)
   const [expandedLabel, setExpandedLabel] = useState<string | undefined>()
   const [pickerOpen, setPickerOpen] = useState(false)
   const [catalog, setCatalog] = useState<CatalogModel[]>([])
@@ -330,6 +464,8 @@ function InteractiveDiscussionRail({ state, subagent, t }: DiscussionRailProps) 
       state={state}
       {...subagent === undefined ? {} : { subagent }}
       t={t}
+      open={open}
+      onToggleOpen={() => { setOpen(current => !current) }}
       {...expandedLabel === undefined ? {} : { expandedLabel }}
       onToggleRow={label => { setExpandedLabel(current => toggleExpandedRailRow(current, label)) }}
       pickerOpen={pickerOpen}

@@ -46,6 +46,7 @@ describe('Collaborate discussion policy', () => {
     expect(text).toContain('accept/reject')
     expect(text).toContain('must not auto-lock the root')
     expect(text).toContain('objective, scope, settled constraints, evidence, requested return')
+    expect(text).toContain('Do not capture or display spawn subagents as a user decision')
     expect(text).toContain('must not block the main discussion')
     expect(text).toContain('before spawning a subagent')
     expect(text).toContain('after each bounded return')
